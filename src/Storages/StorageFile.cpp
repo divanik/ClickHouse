@@ -1366,7 +1366,6 @@ Chunk StorageFileSource::generate()
                     continue;
                 }
             }
-
             if (!read_buf)
             {
                 struct stat file_stat;

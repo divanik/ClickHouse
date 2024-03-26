@@ -1,5 +1,10 @@
 #pragma once
 
+#include <memory>
+#include <IO/ReadBufferFromS3.h>
+#include "IO/Archives/IArchiveReader.h"
+#include "IO/Archives/createArchiveReader.h"
+#include "IO/ReadBuffer.h"
 #include "config.h"
 
 #if USE_AWS_S3
@@ -40,13 +45,17 @@ public:
     {
         KeyWithInfo() = default;
 
-        explicit KeyWithInfo(String key_, std::optional<S3::ObjectInfo> info_ = std::nullopt)
-            : key(std::move(key_)), info(std::move(info_)) {}
+        explicit KeyWithInfo(
+            String key_, std::optional<S3::ObjectInfo> info_ = std::nullopt, std::optional<String> path_in_archive_ = std::nullopt)
+            : key(std::move(key_)), info(std::move(info_)), path_in_archive(path_in_archive_)
+        {
+        }
 
         virtual ~KeyWithInfo() = default;
 
         String key;
         std::optional<S3::ObjectInfo> info;
+        std::optional<String> path_in_archive;
     };
     using KeyWithInfoPtr = std::shared_ptr<KeyWithInfo>;
 
@@ -97,6 +106,7 @@ public:
             const std::string & version_id_,
             const std::vector<String> & keys_,
             const String & bucket_,
+            std::optional<String> & path_in_archive_,
             const S3Settings::RequestSettings & request_settings_,
             KeysWithInfo * read_keys = nullptr,
             std::function<void(FileProgress)> progress_callback_ = {});
@@ -170,6 +180,20 @@ private:
     Block sample_block;
     std::optional<FormatSettings> format_settings;
 
+    struct ArchiveHolder
+    {
+        void setBuffer(std::unique_ptr<ReadBufferFromFileBase> initial_buffer_)
+        {
+            initial_buffer = std::move(initial_buffer_);
+            archive_reader = createArchiveReader(
+                "", [this]() { return std::move(initial_buffer); }, 0);
+        }
+        ArchiveHolder() = default;
+        ArchiveHolder(ArchiveHolder && holder) noexcept = default;
+        std::unique_ptr<ReadBufferFromFileBase> initial_buffer{};
+        std::shared_ptr<IArchiveReader> archive_reader{};
+    };
+
     struct ReaderHolder
     {
     public:
@@ -179,13 +203,15 @@ private:
             std::unique_ptr<ReadBuffer> read_buf_,
             std::shared_ptr<ISource> source_,
             std::unique_ptr<QueryPipeline> pipeline_,
-            std::unique_ptr<PullingPipelineExecutor> reader_)
+            std::unique_ptr<PullingPipelineExecutor> reader_,
+            ArchiveHolder archive_holder_)
             : key_with_info(key_with_info_)
             , bucket(std::move(bucket_))
             , read_buf(std::move(read_buf_))
             , source(std::move(source_))
             , pipeline(std::move(pipeline_))
             , reader(std::move(reader_))
+            , archive_holder(std::move(archive_holder_))
         {
         }
 
@@ -193,10 +219,7 @@ private:
         ReaderHolder(const ReaderHolder & other) = delete;
         ReaderHolder & operator=(const ReaderHolder & other) = delete;
 
-        ReaderHolder(ReaderHolder && other) noexcept
-        {
-            *this = std::move(other);
-        }
+        ReaderHolder(ReaderHolder && other) noexcept { *this = std::move(other); }
 
         ReaderHolder & operator=(ReaderHolder && other) noexcept
         {
@@ -214,7 +237,7 @@ private:
         explicit operator bool() const { return reader != nullptr; }
         PullingPipelineExecutor * operator->() { return reader.get(); }
         const PullingPipelineExecutor * operator->() const { return reader.get(); }
-        String getPath() const { return fs::path(bucket) / key_with_info->key; }
+        String getPath() const { return fs::path(bucket) / key_with_info->key ; }
         const String & getFile() const { return key_with_info->key; }
         const KeyWithInfo & getKeyWithInfo() const { return *key_with_info; }
         std::optional<size_t> getFileSize() const { return key_with_info->info ? std::optional(key_with_info->info->size) : std::nullopt; }
@@ -228,6 +251,7 @@ private:
         std::shared_ptr<ISource> source;
         std::unique_ptr<QueryPipeline> pipeline;
         std::unique_ptr<PullingPipelineExecutor> reader;
+        ArchiveHolder archive_holder;
     };
 
     ReaderHolder reader;
@@ -254,8 +278,9 @@ private:
     ReaderHolder createReader(size_t idx = 0);
     std::future<ReaderHolder> createReaderAsync(size_t idx = 0);
 
-    std::unique_ptr<ReadBuffer> createS3ReadBuffer(const String & key, size_t object_size);
-    std::unique_ptr<ReadBuffer> createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size);
+    std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(const String & key, size_t object_size);
+    std::unique_ptr<ReadBufferFromFileBase>
+    createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size);
 
     void addNumRowsToCache(const String & key, size_t num_rows);
     std::optional<size_t> tryGetNumRowsFromCache(const KeyWithInfo & key_with_info);

@@ -49,7 +49,9 @@ URI::URI(const std::string & uri_)
     static constexpr auto OSS = "OSS";
     static constexpr auto EOS = "EOS";
 
-    uri = Poco::URI(uri_);
+    std::string temporal_uri = uri_;
+    parseFileSource(std::move(temporal_uri), temporal_uri, archive_pattern);
+    uri = Poco::URI(temporal_uri);
 
     std::unordered_map<std::string, std::string> mapper;
     auto context = Context::getGlobalContextInstance();
@@ -156,6 +158,33 @@ void URI::validateBucket(const String & bucket, const Poco::URI & uri)
                         quoteString(bucket), !uri.empty() ? " (" + uri.toString() + ")" : "");
 }
 
+void parseFileSource(String source, String & filename, String & path_to_archive)
+{
+    size_t pos = source.find("::");
+    if (pos == String::npos)
+    {
+        filename = std::move(source);
+        return;
+    }
+
+    std::string_view path_to_archive_view = std::string_view{source}.substr(0, pos);
+    while (path_to_archive_view.ends_with(' '))
+        path_to_archive_view.remove_suffix(1);
+
+    if (path_to_archive_view.empty())
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Path to archive is empty");
+
+    path_to_archive = path_to_archive_view;
+
+    std::string_view filename_view = std::string_view{source}.substr(pos + 2);
+    while (filename_view.front() == ' ')
+        filename_view.remove_prefix(1);
+
+    if (filename_view.empty())
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Filename is empty");
+
+    filename = filename_view;
+}
 }
 
 }

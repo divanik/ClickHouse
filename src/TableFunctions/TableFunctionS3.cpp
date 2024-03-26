@@ -216,7 +216,7 @@ void TableFunctionS3::parseArgumentsImpl(ASTs & args, const ContextPtr & context
         configuration.auth_settings.no_sign_request = no_sign_request;
 
         if (configuration.format == "auto")
-            configuration.format = FormatFactory::instance().tryGetFormatFromFileName(Poco::URI(url).getPath()).value_or("auto");
+            configuration.format = FormatFactory::instance().tryGetFormatFromFileName(configuration.url.uri.getPath()).value_or("auto");
     }
 
     configuration.keys = {configuration.url.key};

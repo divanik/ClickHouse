@@ -1,13 +1,13 @@
 #include "NamedCollections.h"
 
-#include <Interpreters/Context.h>
-#include <IO/WriteBufferFromString.h>
+#include <ranges>
 #include <IO/Operators.h>
+#include <IO/WriteBufferFromString.h>
+#include <Interpreters/Context.h>
+#include <Poco/Util/AbstractConfiguration.h>
 #include <Common/NamedCollections/NamedCollectionConfiguration.h>
 #include <Common/NamedCollections/NamedCollectionUtils.h>
-#include <Poco/Util/AbstractConfiguration.h>
-#include <ranges>
-
+#include <Common/logger_useful.h>
 
 namespace DB
 {
@@ -89,6 +89,9 @@ MutableNamedCollectionPtr NamedCollectionFactory::tryGetUnlocked(
     const std::string & collection_name,
     std::lock_guard<std::mutex> & /* lock */) const
 {
+    LOG_DEBUG(&Poco::Logger::get("Named collections"), "Collections size: {}", loaded_named_collections.size());
+    for (const auto & [name, _] : loaded_named_collections)
+        LOG_DEBUG(&Poco::Logger::get("Named collections"), "Collection name: {}", name);
     auto it = loaded_named_collections.find(collection_name);
     if (it == loaded_named_collections.end())
         return nullptr;

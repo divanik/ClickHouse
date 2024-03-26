@@ -1,22 +1,25 @@
 #include <IO/HTTPCommon.h>
 #include <IO/S3Common.h>
+#include "IO/ReadBufferFromFile.h"
+#include "IO/ReadBufferFromString.h"
 #include "config.h"
 
 #if USE_AWS_S3
 
-#include <IO/ReadBufferFromIStream.h>
-#include <IO/ReadBufferFromS3.h>
-#include <Common/Scheduler/ResourceGuard.h>
-#include <IO/S3/getObjectInfo.h>
-#include <IO/S3/Requests.h>
+#    include <IO/Archives/createArchiveReader.h>
+#    include <IO/ReadBufferFromIStream.h>
+#    include <IO/ReadBufferFromS3.h>
+#    include <IO/S3/Requests.h>
+#    include <IO/S3/getObjectInfo.h>
+#    include <Common/Scheduler/ResourceGuard.h>
 
-#include <Common/Stopwatch.h>
-#include <Common/Throttler.h>
-#include <Common/logger_useful.h>
-#include <Common/ElapsedTimeProfileEventIncrement.h>
-#include <base/sleep.h>
+#    include <base/sleep.h>
+#    include <Common/ElapsedTimeProfileEventIncrement.h>
+#    include <Common/Stopwatch.h>
+#    include <Common/Throttler.h>
+#    include <Common/logger_useful.h>
 
-#include <utility>
+#    include <utility>
 
 
 namespace ProfileEvents
@@ -43,6 +46,38 @@ namespace ErrorCodes
     extern const int SEEK_POSITION_OUT_OF_BOUND;
     extern const int LOGICAL_ERROR;
     extern const int CANNOT_ALLOCATE_MEMORY;
+}
+
+
+ArchiveOpenFromS3File::ArchiveOpenFromS3File(
+    std::shared_ptr<const S3::Client> client_ptr_,
+    const String & bucket_,
+    const String & key_,
+    const String & version_id_,
+    const S3Settings::RequestSettings & request_settings_,
+    const ReadSettings & settings_,
+    String path_in_archive_,
+    bool use_external_buffer_,
+    size_t offset_,
+    size_t read_until_position_,
+    bool restricted_seek_,
+    std::optional<size_t> file_size_)
+    : file_buffer_from_s3(std::make_unique<ReadBufferFromS3>(
+        client_ptr_,
+        bucket_,
+        key_,
+        version_id_,
+        request_settings_,
+        settings_,
+        use_external_buffer_,
+        offset_,
+        read_until_position_,
+        restricted_seek_,
+        file_size_))
+    , archive_reader(createArchiveReader(
+          bucket_ + "/" + key_, [&]() { return std::move(file_buffer_from_s3); }, 0))
+    , path_in_archive(path_in_archive_)
+{
 }
 
 

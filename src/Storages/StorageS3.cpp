@@ -1,3 +1,6 @@
+#include "IO/Archives/IArchiveReader.h"
+#include "IO/Archives/createArchiveReader.h"
+#include "IO/ReadBufferFromFileBase.h"
 #include "config.h"
 
 #if USE_AWS_S3
@@ -448,6 +451,7 @@ public:
         const std::string & version_id_,
         const std::vector<String> & keys_,
         const String & bucket_,
+        std::optional<String> path_in_archive_,
         const S3Settings::RequestSettings & request_settings_,
         KeysWithInfo * read_keys_,
         std::function<void(FileProgress)> file_progress_callback_)
@@ -455,13 +459,14 @@ public:
         , client(client_.clone())
         , version_id(version_id_)
         , bucket(bucket_)
+        , path_in_archive(path_in_archive_)
         , request_settings(request_settings_)
         , file_progress_callback(file_progress_callback_)
     {
         if (read_keys_)
         {
             for (const auto & key : keys)
-                read_keys_->push_back(std::make_shared<KeyWithInfo>(key));
+                read_keys_->push_back(std::make_shared<KeyWithInfo>(key, std::nullopt, path_in_archive_));
         }
     }
 
@@ -478,7 +483,7 @@ public:
             file_progress_callback(FileProgress(0, info->size));
         }
 
-        return std::make_shared<KeyWithInfo>(key, info);
+        return std::make_shared<KeyWithInfo>(key, info, path_in_archive);
     }
 
     size_t objectsCount()
@@ -492,6 +497,7 @@ private:
     std::unique_ptr<S3::Client> client;
     String version_id;
     String bucket;
+    std::optional<String> path_in_archive;
     S3Settings::RequestSettings request_settings;
     std::function<void(FileProgress)> file_progress_callback;
 };
@@ -501,12 +507,12 @@ StorageS3Source::KeysIterator::KeysIterator(
     const std::string & version_id_,
     const std::vector<String> & keys_,
     const String & bucket_,
+    std::optional<String> & path_in_archive_,
     const S3Settings::RequestSettings & request_settings_,
     KeysWithInfo * read_keys,
     std::function<void(FileProgress)> file_progress_callback_)
     : pimpl(std::make_shared<StorageS3Source::KeysIterator::Impl>(
-        client_, version_id_, keys_, bucket_, request_settings_,
-        read_keys, file_progress_callback_))
+        client_, version_id_, keys_, bucket_, path_in_archive_, request_settings_, read_keys, file_progress_callback_))
 {
 }
 
@@ -629,6 +635,8 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
     QueryPipelineBuilder builder;
     std::shared_ptr<ISource> source;
     std::unique_ptr<ReadBuffer> read_buf;
+    ArchiveHolder archive_holder{};
+
     std::optional<size_t> num_rows_from_cache = need_only_count && getContext()->getSettingsRef().use_cache_for_count_from_files ? tryGetNumRowsFromCache(*key_with_info) : std::nullopt;
     if (num_rows_from_cache)
     {
@@ -643,7 +651,14 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
     else
     {
         auto compression_method = chooseCompressionMethod(key_with_info->key, compression_hint);
-        read_buf = createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
+        if (!key_with_info->path_in_archive.has_value())
+            read_buf = createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
+        else
+        {
+            std::unique_ptr<ReadBufferFromFileBase> inter_buf = createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
+            archive_holder.setBuffer(std::move(inter_buf));
+            read_buf = archive_holder.archive_reader->readFile(key_with_info->path_in_archive.value(), true);
+        }
 
         auto input_format = FormatFactory::instance().getInput(
             format,
@@ -688,7 +703,14 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
 
     ProfileEvents::increment(ProfileEvents::EngineFileLikeReadFiles);
 
-    return ReaderHolder{key_with_info, bucket, std::move(read_buf), std::move(source), std::move(pipeline), std::move(current_reader)};
+    return ReaderHolder{
+        key_with_info,
+        bucket,
+        std::move(read_buf),
+        std::move(source),
+        std::move(pipeline),
+        std::move(current_reader),
+        std::move(archive_holder)};
 }
 
 std::future<StorageS3Source::ReaderHolder> StorageS3Source::createReaderAsync(size_t idx)
@@ -696,7 +718,7 @@ std::future<StorageS3Source::ReaderHolder> StorageS3Source::createReaderAsync(si
     return create_reader_scheduler([=, this] { return createReader(idx); }, Priority{});
 }
 
-std::unique_ptr<ReadBuffer> StorageS3Source::createS3ReadBuffer(const String & key, size_t object_size)
+std::unique_ptr<ReadBufferFromFileBase> StorageS3Source::createS3ReadBuffer(const String & key, size_t object_size)
 {
     auto read_settings = getContext()->getReadSettings().adjustBufferSize(object_size);
     read_settings.enable_filesystem_cache = false;
@@ -713,13 +735,21 @@ std::unique_ptr<ReadBuffer> StorageS3Source::createS3ReadBuffer(const String & k
     }
 
     return std::make_unique<ReadBufferFromS3>(
-        client, bucket, key, version_id, request_settings, read_settings,
-        /*use_external_buffer*/ false, /*offset_*/ 0, /*read_until_position_*/ 0,
-        /*restricted_seek_*/ false, object_size);
+        client,
+        bucket,
+        key,
+        version_id,
+        request_settings,
+        read_settings,
+        /*use_external_buffer*/ false,
+        /*offset_*/ 0,
+        /*read_until_position_*/ 0,
+        /*restricted_seek_*/ false,
+        object_size);
 }
 
-std::unique_ptr<ReadBuffer> StorageS3Source::createAsyncS3ReadBuffer(
-    const String & key, const ReadSettings & read_settings, size_t object_size)
+std::unique_ptr<ReadBufferFromFileBase>
+StorageS3Source::createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size)
 {
     auto context = getContext();
     auto read_buffer_creator =
@@ -1121,8 +1151,14 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
         }
 
         return std::make_shared<StorageS3Source::KeysIterator>(
-            *configuration.client, configuration.url.version_id, keys,
-            configuration.url.bucket, configuration.request_settings, read_keys, file_progress_callback);
+            *configuration.client,
+            configuration.url.version_id,
+            keys,
+            configuration.url.bucket,
+            configuration.url.archive_pattern,
+            configuration.request_settings,
+            read_keys,
+            file_progress_callback);
     }
 }
 
