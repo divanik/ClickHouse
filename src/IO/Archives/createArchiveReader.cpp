@@ -1,8 +1,8 @@
 #include <IO/Archives/LibArchiveReader.h>
 #include <IO/Archives/ZipArchiveReader.h>
 #include <IO/Archives/createArchiveReader.h>
+#include "Common/logger_useful.h"
 #include <Common/Exception.h>
-
 
 namespace DB
 {

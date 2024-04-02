@@ -103,66 +103,64 @@ private:
     bool read_all_range_successfully = false;
 };
 
-class ArchiveOpenFromS3File
-{
-protected:
-    ArchiveOpenFromS3File(
-        std::shared_ptr<const S3::Client> client_ptr_,
-        const String & bucket_,
-        const String & key_,
-        const String & version_id_,
-        const S3Settings::RequestSettings & request_settings_,
-        const ReadSettings & settings_,
-        String path_in_archive_,
-        bool use_external_buffer_,
-        size_t offset_,
-        size_t read_until_position_,
-        bool restricted_seek_,
-        std::optional<size_t> file_size_);
+// class ArchiveOpenFromS3File
+// {
+// protected:
+//     ArchiveOpenFromS3File(
+//         std::shared_ptr<const S3::Client> client_ptr_,
+//         const String & bucket_,
+//         const String & key_,
+//         const String & version_id_,
+//         const S3Settings::RequestSettings & request_settings_,
+//         const ReadSettings & settings_,
+//         String path_in_archive_,
+//         bool use_external_buffer_,
+//         size_t offset_,
+//         size_t read_until_position_,
+//         bool restricted_seek_,
+//         std::optional<size_t> file_size_);
 
-    std::unique_ptr<ReadBufferFromFileBase> readFile() { return archive_reader->readFile(path_in_archive, true); }
+//     std::unique_ptr<ReadBufferFromFileBase> readFile() { return archive_reader->readFile(path_in_archive, true); }
 
-private:
-    std::unique_ptr<ReadBufferFromS3> file_buffer_from_s3;
-    std::shared_ptr<IArchiveReader> archive_reader;
-    String path_in_archive;
-};
+// private:
+//     std::unique_ptr<ReadBufferFromS3> file_buffer_from_s3;
+//     std::shared_ptr<IArchiveReader> archive_reader;
+//     String path_in_archive;
+// };
 
-class ReadBufferFromS3Archive : protected ArchiveOpenFromS3File, public std::unique_ptr<ReadBufferFromFileBase>
-{
-public:
-    ReadBufferFromS3Archive(
-        std::shared_ptr<const S3::Client> client_ptr_,
-        const String & bucket_,
-        const String & key_,
-        const String & version_id_,
-        const S3Settings::RequestSettings & request_settings_,
-        const ReadSettings & settings_,
-        const String & path_in_archive,
-        bool use_external_buffer = false,
-        size_t offset_ = 0,
-        size_t read_until_position_ = 0,
-        bool restricted_seek_ = false,
-        std::optional<size_t> file_size_ = std::nullopt)
-        : ArchiveOpenFromS3File(
-            client_ptr_,
-            bucket_,
-            key_,
-            version_id_,
-            request_settings_,
-            settings_,
-            path_in_archive,
-            use_external_buffer,
-            offset_,
-            read_until_position_,
-            restricted_seek_,
-            file_size_)
-        , std::unique_ptr<ReadBufferFromFileBase>(readFile())
-    {
-    }
-};
-
-std::unique_ptr<ReadBufferFromFileBase> get
-
+// class ReadBufferFromS3Archive : protected ArchiveOpenFromS3File, public std::unique_ptr<ReadBufferFromFileBase>
+// {
+// public:
+//     ReadBufferFromS3Archive(
+//         std::shared_ptr<const S3::Client> client_ptr_,
+//         const String & bucket_,
+//         const String & key_,
+//         const String & version_id_,
+//         const S3Settings::RequestSettings & request_settings_,
+//         const ReadSettings & settings_,
+//         const String & path_in_archive,
+//         bool use_external_buffer = false,
+//         size_t offset_ = 0,
+//         size_t read_until_position_ = 0,
+//         bool restricted_seek_ = false,
+//         std::optional<size_t> file_size_ = std::nullopt)
+//     // : ArchiveOpenFromS3File(
+//     //     client_ptr_,
+//     //     bucket_,
+//     //     key_,
+//     //     version_id_,
+//     //     request_settings_,
+//     //     settings_,
+//     //     path_in_archive,
+//     //     use_external_buffer,
+//     //     offset_,
+//     //     read_until_position_,
+//     //     restricted_seek_,
+//     //     file_size_)
+//     // , std::unique_ptr<ReadBufferFromFileBase>(readFile())
+//     {
+//     }
+// };
+// std::unique_ptr<ReadBufferFromFileBase> get
 }
 #endif

@@ -1,8 +1,9 @@
 #include <IO/S3/URI.h>
-#include <Poco/URI.h>
-#include "Common/Macros.h"
 #include <Interpreters/Context.h>
 #include <Storages/NamedCollectionsHelpers.h>
+#include <Poco/URI.h>
+#include "Common/Macros.h"
+#include "Common/logger_useful.h"
 #if USE_AWS_S3
 #include <Common/Exception.h>
 #include <Common/quoteString.h>
@@ -51,7 +52,8 @@ URI::URI(const std::string & uri_)
     static constexpr auto EOS = "EOS";
 
     std::string temporal_uri = uri_;
-    parseFileSource(std::move(temporal_uri), temporal_uri, archive_pattern);
+    parseURIAndPathInsideArchive(std::move(temporal_uri), temporal_uri, archive_pattern);
+    LOG_DEBUG(&Poco::Logger::get("Parser"), "Main uri: {}, Archive path: {}", temporal_uri, archive_pattern.value());
     uri = Poco::URI(temporal_uri);
 
     std::unordered_map<std::string, std::string> mapper;
@@ -80,7 +82,7 @@ URI::URI(const std::string & uri_)
     storage_name = S3;
 
     if (uri.getHost().empty())
-        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Host is empty in S3 URI.");
+        throw Exception(::DB::ErrorCodes::BAD_ARGUMENTS, "Host is empty in S3 URI.");
 
     /// Extract object version ID from query string.
     bool has_version_id = false;
@@ -120,9 +122,10 @@ URI::URI(const std::string & uri_)
         boost::to_upper(name);
         /// For S3Express it will look like s3express-eun1-az1, i.e. contain region and AZ info
         if (name != S3 && !name.starts_with(S3EXPRESS) && name != COS && name != OBS && name != OSS && name != EOS)
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                            "Object storage system name is unrecognized in virtual hosted style S3 URI: {}",
-                            quoteString(name));
+            throw Exception(
+                ::DB::ErrorCodes::BAD_ARGUMENTS,
+                "Object storage system name is unrecognized in virtual hosted style S3 URI: {}",
+                quoteString(name));
 
         if (name == COS)
             storage_name = COSN;
@@ -136,7 +139,7 @@ URI::URI(const std::string & uri_)
         validateBucket(bucket, uri);
     }
     else
-        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Bucket or key name are invalid in S3 URI.");
+        throw Exception(::DB::ErrorCodes::BAD_ARGUMENTS, "Bucket or key name are invalid in S3 URI.");
 }
 
 void URI::addRegionToURI(const std::string &region)
@@ -150,36 +153,39 @@ void URI::validateBucket(const String & bucket, const Poco::URI & uri)
     /// S3 specification requires at least 3 and at most 63 characters in bucket name.
     /// https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-s3-bucket-naming-requirements.html
     if (bucket.length() < 3 || bucket.length() > 63)
-        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Bucket name length is out of bounds in virtual hosted style S3 URI: {}{}",
-                        quoteString(bucket), !uri.empty() ? " (" + uri.toString() + ")" : "");
+        throw Exception(
+            ::DB::ErrorCodes::BAD_ARGUMENTS,
+            "Bucket name length is out of bounds in virtual hosted style S3 URI: {}{}",
+            quoteString(bucket),
+            !uri.empty() ? " (" + uri.toString() + ")" : "");
 }
 
-void parseFileSource(String source, String & filename, String & path_to_archive)
+void URI::parseURIAndPathInsideArchive(std::string source, std::string & final_uri, std::optional<std::string> & path_in_archive)
 {
     size_t pos = source.find("::");
-    if (pos == String::npos)
+    if (pos == std::string::npos)
     {
-        filename = std::move(source);
+        final_uri = std::move(source);
         return;
     }
 
-    std::string_view path_to_archive_view = std::string_view{source}.substr(0, pos);
-    while (path_to_archive_view.ends_with(' '))
-        path_to_archive_view.remove_suffix(1);
+    std::string_view uri_view = std::string_view{source}.substr(0, pos);
+    while (uri_view.ends_with(' '))
+        uri_view.remove_suffix(1);
 
-    if (path_to_archive_view.empty())
+    if (uri_view.empty())
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Path to archive is empty");
 
-    path_to_archive = path_to_archive_view;
+    final_uri = uri_view;
 
-    std::string_view filename_view = std::string_view{source}.substr(pos + 2);
-    while (filename_view.front() == ' ')
-        filename_view.remove_prefix(1);
+    std::string_view path_in_archive_view = std::string_view{source}.substr(pos + 2);
+    while (path_in_archive_view.front() == ' ')
+        path_in_archive_view.remove_prefix(1);
 
-    if (filename_view.empty())
+    if (path_in_archive_view.empty())
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Filename is empty");
 
-    filename = filename_view;
+    path_in_archive = path_in_archive_view;
 }
 }
 

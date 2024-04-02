@@ -61,6 +61,8 @@
 #include <shared_mutex>
 #include <algorithm>
 
+#include "Common/logger_useful.h"
+
 namespace ProfileEvents
 {
     extern const Event CreatedReadBufferOrdinary;
@@ -350,7 +352,9 @@ std::unique_ptr<ReadBuffer> createReadBuffer(
 
 Strings StorageFile::getPathsList(const String & table_path, const String & user_files_path, const ContextPtr & context, size_t & total_bytes_to_read)
 {
+    LOG_DEBUG(&Poco::Logger::get("Kek"), "user files path: {}", user_files_path);
     fs::path user_files_absolute_path = fs::weakly_canonical(user_files_path);
+    LOG_DEBUG(&Poco::Logger::get("Kek"), "user_files_absolute_path: {}", user_files_absolute_path);
     fs::path fs_table_path(table_path);
     if (fs_table_path.is_relative())
         fs_table_path = user_files_absolute_path / fs_table_path;
@@ -383,7 +387,10 @@ Strings StorageFile::getPathsList(const String & table_path, const String & user
     }
 
     for (const auto & cur_path : paths)
+    {
+        LOG_DEBUG(&Poco::Logger::get("Kek"), "cur_path: {}", cur_path);
         checkCreationIsAllowed(context, user_files_absolute_path, cur_path, can_be_directory);
+    }
 
     return paths;
 }

@@ -2,14 +2,15 @@
 #include <TableFunctions/ITableFunctionFileLike.h>
 #include <TableFunctions/TableFunctionFile.h>
 
-#include "registerTableFunctions.h"
 #include <Access/Common/AccessFlags.h>
+#include <Formats/FormatFactory.h>
 #include <Interpreters/Context.h>
+#include <Interpreters/evaluateConstantExpression.h>
 #include <Storages/ColumnsDescription.h>
 #include <Storages/StorageFile.h>
 #include <TableFunctions/TableFunctionFactory.h>
-#include <Interpreters/evaluateConstantExpression.h>
-#include <Formats/FormatFactory.h>
+#include "Common/logger_useful.h"
+#include "registerTableFunctions.h"
 
 
 namespace DB
@@ -84,6 +85,9 @@ StoragePtr TableFunctionFile::getStorage(const String & source,
 
     if (fd >= 0)
         return std::make_shared<StorageFile>(fd, args);
+
+
+    LOG_DEBUG(&Poco::Logger::get("Named collections"), "getUserFilesPath: {}", global_context->getUserFilesPath());
 
     return std::make_shared<StorageFile>(source, global_context->getUserFilesPath(), false, args);
 }

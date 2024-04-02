@@ -5,6 +5,7 @@
 #include "IO/Archives/IArchiveReader.h"
 #include "IO/Archives/createArchiveReader.h"
 #include "IO/ReadBuffer.h"
+#include "base/types.h"
 #include "config.h"
 
 #if USE_AWS_S3
@@ -41,7 +42,6 @@ class NamedCollection;
 class StorageS3Source : public SourceWithKeyCondition, WithContext
 {
 public:
-
     struct KeyWithInfo
     {
         KeyWithInfo() = default;
@@ -74,6 +74,8 @@ public:
         /// fixme: May underestimate if the glob has a strong filter, so there are few matches among the first 1000 ListObjects results.
         virtual size_t estimatedKeysCount() = 0;
 
+        virtual void getSourceAndFinishInitialization(const StorageS3Source *) { }
+
         KeyWithInfoPtr operator ()() { return next(); }
     };
 
@@ -85,6 +87,7 @@ public:
             const S3::URI & globbed_uri_,
             const ActionsDAG::Node * predicate,
             const NamesAndTypesList & virtual_columns,
+            const std::optional<String> & path_in_archive_,
             const ContextPtr & context,
             KeysWithInfo * read_keys_ = nullptr,
             const S3Settings::RequestSettings & request_settings_ = {},
@@ -107,7 +110,7 @@ public:
             const std::string & version_id_,
             const std::vector<String> & keys_,
             const String & bucket_,
-            std::optional<String> & path_in_archive_,
+            const std::optional<String> & path_in_archive_,
             const S3Settings::RequestSettings & request_settings_,
             KeysWithInfo * read_keys = nullptr,
             std::function<void(FileProgress)> progress_callback_ = {});
@@ -135,6 +138,30 @@ public:
 
         ReadTaskCallback callback;
     };
+
+    class ArchiveIterator : public IIterator
+    {
+    public:
+        explicit ArchiveIterator(std::unique_ptr<IIterator> basic_iterator_, std::string archive_pattern_, const StorageS3Source * source_);
+
+        KeyWithInfoPtr next(size_t) override; /// NOLINT
+        size_t estimatedKeysCount() override;
+        void getSourceAndFinishInitialization(const StorageS3Source * source_) override;
+
+    private:
+        void refreshArchive();
+        std::unique_ptr<IIterator> basic_iterator;
+        StorageS3Source::KeyWithInfoPtr basic_key_with_info_ptr;
+        std::unique_ptr<ReadBufferFromFileBase> basic_read_buffer;
+        // std::unique_ptr<> pointe;
+        std::shared_ptr<IArchiveReader> archive_reader{nullptr};
+        std::unique_ptr<IArchiveReader::FileEnumerator> file_enumerator = nullptr;
+        std::variant<String, IArchiveReader::NameFilter> archive_pattern;
+        const StorageS3Source * source;
+    };
+
+
+    friend StorageS3Source::ArchiveIterator;
 
     StorageS3Source(
         const ReadFromFormatInfo & info,
@@ -164,6 +191,8 @@ public:
 
     Chunk generate() override;
 
+    std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(const String & key, size_t object_size) const;
+
 private:
     friend class StorageS3QueueSource;
 
@@ -183,14 +212,18 @@ private:
 
     struct ArchiveHolder
     {
-        void setBuffer(std::unique_ptr<ReadBufferFromFileBase> initial_buffer_)
+        void setBuffer(std::string path_to_archive_, size_t archive_size_, std::unique_ptr<ReadBufferFromFileBase> initial_buffer_)
         {
+            // path_to_archive = path_to_archive_;
+            // archive_size = archive_size_;
             initial_buffer = std::move(initial_buffer_);
             archive_reader = createArchiveReader(
-                "", [this]() { return std::move(initial_buffer); }, 0);
+                path_to_archive_, [this]() { return std::move(initial_buffer); }, archive_size_);
         }
         ArchiveHolder() = default;
         ArchiveHolder(ArchiveHolder && holder) noexcept = default;
+        // std::string path_to_archive;
+        // size_t archive_size;
         std::unique_ptr<ReadBufferFromFileBase> initial_buffer{};
         std::shared_ptr<IArchiveReader> archive_reader{};
     };
@@ -279,9 +312,8 @@ private:
     ReaderHolder createReader(size_t idx = 0);
     std::future<ReaderHolder> createReaderAsync(size_t idx = 0);
 
-    std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(const String & key, size_t object_size);
     std::unique_ptr<ReadBufferFromFileBase>
-    createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size);
+    createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size) const;
 
     void addNumRowsToCache(const String & key, size_t num_rows);
     std::optional<size_t> tryGetNumRowsFromCache(const KeyWithInfo & key_with_info);
@@ -416,7 +448,7 @@ private:
 
     bool parallelizeOutputAfterReading(ContextPtr context) const override;
 };
-
+String fileInsideArchive(const String & archive_name, const String & name_inside_archive);
 }
 
 #endif

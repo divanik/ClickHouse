@@ -1,3 +1,4 @@
+#include <optional>
 #include "config.h"
 
 #if USE_AWS_S3
@@ -611,8 +612,14 @@ void StorageS3Queue::checkTableStructure(const String & zookeeper_prefix, const 
 std::shared_ptr<StorageS3Queue::FileIterator> StorageS3Queue::createFileIterator(ContextPtr local_context, const ActionsDAG::Node * predicate)
 {
     auto glob_iterator = std::make_unique<StorageS3QueueSource::GlobIterator>(
-        *configuration.client, configuration.url, predicate, getVirtualsList(), local_context,
-        /* read_keys */nullptr, configuration.request_settings);
+        *configuration.client,
+        configuration.url,
+        predicate,
+        getVirtualsList(),
+        std::nullopt,
+        local_context,
+        /* read_keys */ nullptr,
+        configuration.request_settings);
 
     return std::make_shared<FileIterator>(files_metadata, std::move(glob_iterator), s3queue_settings->s3queue_current_shard_num, shutdown_called);
 }

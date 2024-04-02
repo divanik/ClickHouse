@@ -100,7 +100,9 @@ namespace
 void verifyClientConfiguration(const Aws::Client::ClientConfiguration & client_config)
 {
     if (!client_config.retryStrategy)
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "The S3 client can only be used with Client::RetryStrategy, define it in the client configuration");
+        throw Exception(
+            ::DB::ErrorCodes::LOGICAL_ERROR,
+            "The S3 client can only be used with Client::RetryStrategy, define it in the client configuration");
 
     assert_cast<const Client::RetryStrategy &>(*client_config.retryStrategy);
 }
@@ -612,7 +614,7 @@ Client::doRequest(RequestType & request, RequestFn request_fn) const
         request.overrideURI(*new_uri);
     }
 
-    throw Exception(ErrorCodes::TOO_MANY_REDIRECTS, "Too many redirects");
+    throw Exception(::DB::ErrorCodes::TOO_MANY_REDIRECTS, "Too many redirects");
 }
 
 template <bool IsReadMethod, typename RequestType, typename RequestFn>
@@ -822,7 +824,7 @@ void ClientCacheRegistry::registerClient(const std::shared_ptr<ClientCache> & cl
     std::lock_guard lock(clients_mutex);
     auto [it, inserted] = client_caches.emplace(client_cache.get(), client_cache);
     if (!inserted)
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Same S3 client registered twice");
+        throw Exception(::DB::ErrorCodes::LOGICAL_ERROR, "Same S3 client registered twice");
 }
 
 void ClientCacheRegistry::unregisterClient(ClientCache * client)
@@ -830,7 +832,8 @@ void ClientCacheRegistry::unregisterClient(ClientCache * client)
     std::lock_guard lock(clients_mutex);
     auto erased = client_caches.erase(client);
     if (erased == 0)
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Can't unregister S3 client, either it was already unregistered or not registered at all");
+        throw Exception(
+            ::DB::ErrorCodes::LOGICAL_ERROR, "Can't unregister S3 client, either it was already unregistered or not registered at all");
 }
 
 void ClientCacheRegistry::clearCacheForAll()
