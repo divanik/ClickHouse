@@ -449,6 +449,7 @@ private:
     bool parallelizeOutputAfterReading(ContextPtr context) const override;
 };
 String fileInsideArchive(const String & archive_name, const String & name_inside_archive);
+String removeArchiveName(const String & archive_name, const String & full_name);
 }
 
 #endif
