@@ -250,8 +250,7 @@ String AWSEC2MetadataClient::getAvailabilityZoneOrException()
 
     std::istream & rs = session.receiveResponse(response);
     if (response.getStatus() != Poco::Net::HTTPResponse::HTTP_OK)
-        throw DB::Exception(
-            ::DB::ErrorCodes::AWS_ERROR, "Failed to get AWS availability zone. HTTP response code: {}", response.getStatus());
+        throw DB::Exception(ErrorCodes::AWS_ERROR, "Failed to get AWS availability zone. HTTP response code: {}", response.getStatus());
     String response_data;
     Poco::StreamCopier::copyToString(rs, response_data);
     return response_data;
@@ -270,16 +269,14 @@ String getGCPAvailabilityZoneOrException()
     session.sendRequest(request);
     std::istream & rs = session.receiveResponse(response);
     if (response.getStatus() != Poco::Net::HTTPResponse::HTTP_OK)
-        throw DB::Exception(
-            ::DB::ErrorCodes::GCP_ERROR, "Failed to get GCP availability zone. HTTP response code: {}", response.getStatus());
+        throw DB::Exception(ErrorCodes::GCP_ERROR, "Failed to get GCP availability zone. HTTP response code: {}", response.getStatus());
     String response_data;
     Poco::StreamCopier::copyToString(rs, response_data);
     Strings zone_info;
     boost::split(zone_info, response_data, boost::is_any_of("/"));
     /// We expect GCP returns a string as "projects/123456789/zones/us-central1a".
     if (zone_info.size() != 4)
-        throw DB::Exception(
-            ::DB::ErrorCodes::GCP_ERROR, "Invalid format of GCP zone information, expect projects/<project-number>/zones/<zone-value>");
+        throw DB::Exception(ErrorCodes::GCP_ERROR, "Invalid format of GCP zone information, expect projects/<project-number>/zones/<zone-value>");
     return zone_info[3];
 }
 
@@ -300,11 +297,8 @@ String getRunningAvailabilityZone()
         catch (...)
         {
             auto gcp_ex_msg = getExceptionMessage(std::current_exception(), false);
-            throw DB::Exception(
-                ::DB::ErrorCodes::UNSUPPORTED_METHOD,
-                "Failed to find the availability zone, tried AWS and GCP. AWS Error: {}\nGCP Error: {}",
-                aws_ex_msg,
-                gcp_ex_msg);
+            throw DB::Exception(ErrorCodes::UNSUPPORTED_METHOD,
+                "Failed to find the availability zone, tried AWS and GCP. AWS Error: {}\nGCP Error: {}", aws_ex_msg, gcp_ex_msg);
         }
     }
 }
@@ -803,7 +797,7 @@ namespace S3
 
 std::string getRunningAvailabilityZone()
 {
-    throw DB::Exception(::DB::ErrorCodes::UNSUPPORTED_METHOD, "Does not support availability zone detection for non-cloud environment");
+    throw DB::Exception(ErrorCodes::UNSUPPORTED_METHOD, "Does not support availability zone detection for non-cloud environment");
 }
 
 }
