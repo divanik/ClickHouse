@@ -7,7 +7,6 @@
 #include <base/errnoToString.h>
 #include <unzip.h>
 
-#    include <Common/logger_useful.h>
 
 namespace DB
 {
@@ -539,13 +538,6 @@ std::unique_ptr<ZipArchiveReader::FileEnumerator> ZipArchiveReader::firstFile()
 std::unique_ptr<ReadBufferFromFileBase> ZipArchiveReader::readFile(const String & filename, bool throw_on_not_found)
 {
     auto handle = acquireHandle();
-    size_t files_num = 0;
-    for (auto & file : handle.getAllFiles([](const std::string &) { return true; }))
-    {
-        LOG_DEBUG(&Poco::Logger::get("File in archive: "), "File name: {}", file);
-        ++files_num;
-    }
-    LOG_DEBUG(&Poco::Logger::get("File in archive: "), "All files number: {}", files_num);
     if (!handle.locateFile(filename))
     {
         if (throw_on_not_found)

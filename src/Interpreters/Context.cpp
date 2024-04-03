@@ -1014,10 +1014,7 @@ void Context::setPath(const String & path)
         shared->flags_path = shared->path + "flags/";
 
     if (shared->user_files_path.empty())
-    {
         shared->user_files_path = shared->path + "user_files/";
-        LOG_DEBUG(&Poco::Logger::get("setUserFilesPath"), "Initializing path: {}", shared->user_files_path);
-    }
 
     if (shared->dictionaries_lib_path.empty())
         shared->dictionaries_lib_path = shared->path + "dictionaries_lib/";
@@ -1184,7 +1181,6 @@ void Context::setFlagsPath(const String & path)
 void Context::setUserFilesPath(const String & path)
 {
     std::lock_guard lock(shared->mutex);
-    LOG_DEBUG(&Poco::Logger::get("setUserFilesPath"), "Setting path: {}", path);
     shared->user_files_path = path;
 }
 
