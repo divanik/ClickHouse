@@ -5,6 +5,7 @@
 #include "IO/Archives/IArchiveReader.h"
 #include "IO/Archives/createArchiveReader.h"
 #include "IO/ReadBuffer.h"
+#include "Interpreters/Context_fwd.h"
 #include "base/types.h"
 #include "config.h"
 
@@ -38,6 +39,27 @@ namespace DB
 
 class PullingPipelineExecutor;
 class NamedCollection;
+
+class S3ReadBufferCreator : WithContext
+{
+public:
+    S3ReadBufferCreator(
+        const std::shared_ptr<const S3::Client> & client_,
+        const String & bucket_,
+        const String & version_id_,
+        const S3Settings::RequestSettings & request_settings_,
+        const ContextPtr & context_);
+    std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(const String & key, size_t object_size) const;
+    std::unique_ptr<ReadBufferFromFileBase>
+    createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size) const;
+
+private:
+    std::shared_ptr<const S3::Client> client;
+    String bucket;
+    String version_id;
+    S3Settings::RequestSettings request_settings;
+    LoggerPtr log = getLogger("S3ReadBufferCreator");
+};
 
 class StorageS3Source : public SourceWithKeyCondition, WithContext
 {
@@ -142,22 +164,23 @@ public:
     class ArchiveIterator : public IIterator
     {
     public:
-        explicit ArchiveIterator(std::unique_ptr<IIterator> basic_iterator_, std::string archive_pattern_, const StorageS3Source * source_);
+        explicit ArchiveIterator(
+            std::unique_ptr<IIterator> basic_iterator_, std::string archive_pattern_, std::shared_ptr<const S3ReadBufferCreator> source_);
 
         KeyWithInfoPtr next(size_t) override; /// NOLINT
         size_t estimatedKeysCount() override;
-        void getSourceAndFinishInitialization(const StorageS3Source * source_) override;
+        // void getSourceAndFinishInitialization(const StorageS3Source * source_) override;
 
     private:
         void refreshArchive();
         std::unique_ptr<IIterator> basic_iterator;
         StorageS3Source::KeyWithInfoPtr basic_key_with_info_ptr;
         std::unique_ptr<ReadBufferFromFileBase> basic_read_buffer;
-        // std::unique_ptr<> pointe;
         std::shared_ptr<IArchiveReader> archive_reader{nullptr};
         std::unique_ptr<IArchiveReader::FileEnumerator> file_enumerator = nullptr;
         std::variant<String, IArchiveReader::NameFilter> archive_pattern;
-        const StorageS3Source * source;
+        std::shared_ptr<const S3ReadBufferCreator> source;
+        std::mutex take_next_mutex;
     };
 
 
@@ -178,7 +201,8 @@ public:
         const String & url_host_and_port,
         std::shared_ptr<IIterator> file_iterator_,
         size_t max_parsing_threads,
-        bool need_only_count_);
+        bool need_only_count_,
+        std::shared_ptr<S3ReadBufferCreator> s3_read_buffer_creator);
 
     ~StorageS3Source() override;
 
@@ -209,6 +233,8 @@ private:
     std::shared_ptr<const S3::Client> client;
     Block sample_block;
     std::optional<FormatSettings> format_settings;
+    std::shared_ptr<S3ReadBufferCreator> s3_read_buffer_creator;
+
 
     struct ArchiveHolder
     {
@@ -311,9 +337,6 @@ private:
     /// Recreate ReadBuffer and Pipeline for each file.
     ReaderHolder createReader(size_t idx = 0);
     std::future<ReaderHolder> createReaderAsync(size_t idx = 0);
-
-    std::unique_ptr<ReadBufferFromFileBase>
-    createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size) const;
 
     void addNumRowsToCache(const String & key, size_t num_rows);
     std::optional<size_t> tryGetNumRowsFromCache(const KeyWithInfo & key_with_info);

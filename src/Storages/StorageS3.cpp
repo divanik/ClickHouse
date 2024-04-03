@@ -1,13 +1,17 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string_view>
+#include <Poco/Logger.h>
 #include "Common/logger_useful.h"
 #include "Core/Types.h"
 #include "IO/Archives/IArchiveReader.h"
 #include "IO/Archives/createArchiveReader.h"
+#include "IO/ReadBuffer.h"
 #include "IO/ReadBufferFromFileBase.h"
+#include "Interpreters/Context_fwd.h"
 #include "Parsers/IAST_fwd.h"
 #include "Storages/MergeTree/ReplicatedMergeTreePartHeader.h"
 #include "config.h"
@@ -78,8 +82,7 @@
 #include <QueryPipeline/Pipe.h>
 #include <filesystem>
 
-#include <boost/algorithm/string.hpp>
-#    include <Common/logger_useful.h>
+#    include <boost/algorithm/string.hpp>
 
 
 #    pragma clang diagnostic push
@@ -192,7 +195,7 @@ private:
 
     std::shared_ptr<StorageS3Source::IIterator> iterator_wrapper;
 
-    void createIterator(const ActionsDAG::Node * predicate);
+    void createIterator(const ActionsDAG::Node * predicate, std::shared_ptr<const S3ReadBufferCreator> read_buffer_creator);
 };
 
 
@@ -598,17 +601,13 @@ size_t StorageS3Source::ReadTaskIterator::estimatedKeysCount()
 
 
 StorageS3Source::ArchiveIterator::ArchiveIterator(
-    std::unique_ptr<IIterator> basic_iterator_, std::string archive_pattern_, const StorageS3Source * source_)
+    std::unique_ptr<IIterator> basic_iterator_, std::string archive_pattern_, std::shared_ptr<const S3ReadBufferCreator> source_)
     : basic_iterator(std::move(basic_iterator_))
     , basic_key_with_info_ptr(basic_iterator->next())
     , archive_pattern(archive_pattern_)
     , source(source_)
 {
-}
-
-void StorageS3Source::ArchiveIterator::getSourceAndFinishInitialization(const StorageS3Source * source_)
-{
-    source = source_;
+    LOG_DEBUG(&Poco::Logger::get("Archive Iterator constructor"), "Archive Iterator constructor");
     std::string archive_pattern_string = std::get<std::string>(archive_pattern);
     if (archive_pattern_string.find_first_of("*?{") != std::string::npos)
     {
@@ -619,7 +618,7 @@ void StorageS3Source::ArchiveIterator::getSourceAndFinishInitialization(const St
                 "Cannot compile regex from glob ({}): {}",
                 archive_pattern_string,
                 matcher->error());
-
+        LOG_DEBUG(&Poco::Logger::get("Changing format"), "Changing format");
         archive_pattern
             = IArchiveReader::NameFilter{[matcher, matcher_mutex = std::make_shared<std::mutex>()](const std::string & p) mutable
                                          {
@@ -630,79 +629,88 @@ void StorageS3Source::ArchiveIterator::getSourceAndFinishInitialization(const St
     refreshArchive();
 }
 
+// void StorageS3Source::ArchiveIterator::getSourceAndFinishInitialization(const S3ReadBufferCreator * source_)
+// {
+//     source = source_;
+//     std::string archive_pattern_string = std::get<std::string>(archive_pattern);
+//     if (archive_pattern_string.find_first_of("*?{") != std::string::npos)
+//     {
+//         auto matcher = std::make_shared<re2::RE2>(makeRegexpPatternFromGlobs(archive_pattern_string));
+//         if (!matcher->ok())
+//             throw Exception(
+//                 ErrorCodes::CANNOT_COMPILE_REGEXP,
+//                 "Cannot compile regex from glob ({}): {}",
+//                 archive_pattern_string,
+//                 matcher->error());
+
+//         archive_pattern
+//             = IArchiveReader::NameFilter{[matcher, matcher_mutex = std::make_shared<std::mutex>()](const std::string & p) mutable
+//                                          {
+//             std::lock_guard lock(*matcher_mutex);
+//             return re2::RE2::FullMatch(p, *matcher);
+//                                          }};
+//     }
+//     refreshArchive();
+// }
+
 StorageS3Source::KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
 {
-    while (archive_reader)
+    // std::unique_lock lock{take_next_mutex};
+    // if (!archive_reader)
+    //     return {};
+    // lock.unlock();
+    // StorageS3Source::KeyWithInfoPtr basic_key_with_info_ptr_old = basic_key_with_info_ptr;
+    // if ()
+    // {
+    // }
+    // lock.unlock();
+    if (std::holds_alternative<String>(archive_pattern))
     {
-        if (std::holds_alternative<String>(archive_pattern))
+        while (true)
         {
-            LOG_DEBUG(
-                &Poco::Logger::get("Inside archive info"),
-                "Key: {}, Archive pattern: {}, Archive Reader is Null: {}",
-                basic_key_with_info_ptr->key,
-                std::get<std::string>(archive_pattern),
-                archive_reader.get() == nullptr);
-            LOG_DEBUG(
-                &Poco::Logger::get("Inside archive info"),
-                "Exists: {}",
-                archive_reader->fileExists(fileInsideArchive(basic_key_with_info_ptr->key, std::get<String>(archive_pattern))));
-            if (archive_reader->fileExists(fileInsideArchive(basic_key_with_info_ptr->key, std::get<String>(archive_pattern))))
+            std::unique_lock lock{take_next_mutex};
+            if (!archive_reader)
+                return {};
+            StorageS3Source::KeyWithInfoPtr current_basic_key_with_info_ptr = basic_key_with_info_ptr;
+            std::shared_ptr<IArchiveReader> tmp_archive_reader = archive_reader;
+            basic_key_with_info_ptr = basic_iterator->next();
+            refreshArchive();
+            lock.unlock();
+            if (tmp_archive_reader->fileExists(fileInsideArchive(basic_key_with_info_ptr->key, std::get<String>(archive_pattern))))
             {
-                StorageS3Source::KeyWithInfoPtr basic_key_with_info_ptr_old = basic_key_with_info_ptr;
-                LOG_DEBUG(
-                    &Poco::Logger::get("Writing this 1: "),
-                    "Key: {}, Archive pattern: {}",
-                    basic_key_with_info_ptr_old->key,
-                    std::get<std::string>(archive_pattern));
-                basic_key_with_info_ptr = basic_iterator->next();
-                LOG_DEBUG(
-                    &Poco::Logger::get("Writing this 2: "),
-                    "Key: {}, Archive pattern: {}",
-                    basic_key_with_info_ptr_old->key,
-                    std::get<std::string>(archive_pattern));
-                refreshArchive();
-                LOG_DEBUG(
-                    &Poco::Logger::get("Writing this 3: "),
-                    "Key: {}, Archive pattern: {}",
-                    basic_key_with_info_ptr_old->key,
-                    std::get<std::string>(archive_pattern));
                 return std::make_shared<StorageS3Source::KeyWithInfo>(
-                    basic_key_with_info_ptr_old->key, std::nullopt, std::optional{std::get<String>(archive_pattern)});
+                    current_basic_key_with_info_ptr->key, std::nullopt, std::optional{std::get<String>(archive_pattern)});
             }
         }
-        else if (file_enumerator)
-        {
-            do
-            {
-                String filename = file_enumerator->getFileName();
-                bool satisfies
-                    = (std::get<IArchiveReader::NameFilter>(archive_pattern))(removeArchiveName(basic_key_with_info_ptr->key, filename));
-                LOG_DEBUG(
-                    &Poco::Logger::get("Inside archive info"),
-                    "Filename: {}, Archive name: {}, Satisfy: {}, Inside name: {}",
-                    filename,
-                    basic_key_with_info_ptr->key,
-                    satisfies,
-                    removeArchiveName(basic_key_with_info_ptr->key, filename));
-                if (satisfies)
-                {
-                    auto basic_key_with_info_ptr_old = basic_key_with_info_ptr;
-                    if (!file_enumerator->nextFile())
-                    {
-                        basic_key_with_info_ptr = basic_iterator->next();
-                        refreshArchive();
-                    }
-                    return std::make_shared<StorageS3Source::KeyWithInfo>(
-                        basic_key_with_info_ptr_old->key,
-                        std::nullopt,
-                        std::optional{removeArchiveName(basic_key_with_info_ptr_old->key, filename)});
-                }
-            } while (file_enumerator->nextFile());
-        }
-        basic_key_with_info_ptr = basic_iterator->next();
-        refreshArchive();
     }
-    return {};
+    else
+    {
+        while (true)
+        {
+            std::unique_lock lock{take_next_mutex};
+            if (!archive_reader)
+                return {};
+            StorageS3Source::KeyWithInfoPtr current_basic_key_with_info_ptr = basic_key_with_info_ptr;
+            String current_filename = file_enumerator->getFileName();
+            std::shared_ptr<IArchiveReader> current_archive_reader = archive_reader;
+            if (!file_enumerator->nextFile())
+            {
+                basic_key_with_info_ptr = basic_iterator->next();
+                refreshArchive();
+            }
+            lock.unlock();
+            bool satisfies = (std::get<IArchiveReader::NameFilter>(archive_pattern))(
+                removeArchiveName(current_basic_key_with_info_ptr->key, current_filename));
+            LOG_DEBUG(&Poco::Logger::get("Lolchik"), "{} {}", current_basic_key_with_info_ptr->key, current_filename);
+            if (satisfies)
+            {
+                return std::make_shared<StorageS3Source::KeyWithInfo>(
+                    current_basic_key_with_info_ptr->key,
+                    std::nullopt,
+                    std::optional{removeArchiveName(current_basic_key_with_info_ptr->key, current_filename)});
+            }
+        }
+    }
 }
 
 size_t StorageS3Source::ArchiveIterator::estimatedKeysCount()
@@ -744,7 +752,8 @@ StorageS3Source::StorageS3Source(
     const String & url_host_and_port_,
     std::shared_ptr<IIterator> file_iterator_,
     const size_t max_parsing_threads_,
-    bool need_only_count_)
+    bool need_only_count_,
+    std::shared_ptr<S3ReadBufferCreator> s3_read_buffer_creator_)
     : SourceWithKeyCondition(info.source_header, false)
     , WithContext(context_)
     , name(std::move(name_))
@@ -760,16 +769,16 @@ StorageS3Source::StorageS3Source(
     , client(client_)
     , sample_block(info.format_header)
     , format_settings(format_settings_)
+    , s3_read_buffer_creator(s3_read_buffer_creator_)
     , requested_virtual_columns(info.requested_virtual_columns)
     , file_iterator(file_iterator_)
-    , max_parsing_threads(1)
+    , max_parsing_threads(max_parsing_threads_)
     , need_only_count(need_only_count_)
     , create_reader_pool(
           CurrentMetrics::StorageS3Threads, CurrentMetrics::StorageS3ThreadsActive, CurrentMetrics::StorageS3ThreadsScheduled, 1)
     , create_reader_scheduler(threadPoolCallbackRunner<ReaderHolder>(create_reader_pool, "CreateS3Reader"))
 {
     file_iterator_->getSourceAndFinishInitialization(this);
-    [[maybe_unused]] auto kek = max_parsing_threads_;
 }
 
 void StorageS3Source::lazyInitialize(size_t idx)
@@ -824,13 +833,14 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
         if (!key_with_info->path_in_archive.has_value())
         {
             LOG_DEBUG(&Poco::Logger::get("Perchik"), "Perchik");
-            read_buf = createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
+            read_buf = s3_read_buffer_creator->createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
         }
         else
         {
             LOG_DEBUG(
                 &Poco::Logger::get("Archive structure"), "Path: {}, Name: {}", key_with_info->key, key_with_info->path_in_archive.value());
-            std::unique_ptr<ReadBufferFromFileBase> inter_buf = createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
+            std::unique_ptr<ReadBufferFromFileBase> inter_buf
+                = s3_read_buffer_creator->createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
             archive_holder.setBuffer(key_with_info->key, key_with_info->info->size, std::move(inter_buf));
             read_buf = archive_holder.archive_reader->readFile(
                 fileInsideArchive(key_with_info->key, key_with_info->path_in_archive.value()), true);
@@ -894,7 +904,18 @@ std::future<StorageS3Source::ReaderHolder> StorageS3Source::createReaderAsync(si
     return create_reader_scheduler([=, this] { return createReader(idx); }, Priority{});
 }
 
-std::unique_ptr<ReadBufferFromFileBase> StorageS3Source::createS3ReadBuffer(const String & key, size_t object_size) const
+S3ReadBufferCreator::S3ReadBufferCreator(
+    const std::shared_ptr<const S3::Client> & client_,
+    const String & bucket_,
+    const String & version_id_,
+    const S3Settings::RequestSettings & request_settings_,
+    const ContextPtr & context_)
+    : WithContext(context_), client(client_), bucket(bucket_), version_id(version_id_), request_settings(request_settings_)
+{
+}
+
+
+std::unique_ptr<ReadBufferFromFileBase> S3ReadBufferCreator::createS3ReadBuffer(const String & key, size_t object_size) const
 {
     auto read_settings = getContext()->getReadSettings().adjustBufferSize(object_size);
     read_settings.enable_filesystem_cache = false;
@@ -926,7 +947,7 @@ std::unique_ptr<ReadBufferFromFileBase> StorageS3Source::createS3ReadBuffer(cons
 }
 
 std::unique_ptr<ReadBufferFromFileBase>
-StorageS3Source::createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size) const
+S3ReadBufferCreator::createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size) const
 {
     auto context = getContext();
     auto read_buffer_creator =
@@ -1300,7 +1321,7 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
     ContextPtr local_context,
     const ActionsDAG::Node * predicate,
     const NamesAndTypesList & virtual_columns,
-    bool main_call,
+    std::shared_ptr<const S3ReadBufferCreator> s3_read_buffer_creator_,
     StorageS3::KeysWithInfo * read_keys = nullptr,
     std::function<void(FileProgress)> file_progress_callback = {})
 {
@@ -1311,7 +1332,7 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
     else if (configuration.withGlobs())
     {
         /// Iterate through disclosed globs and make a source for each file
-        if (configuration.url.archive_pattern.has_value() && main_call)
+        if (configuration.url.archive_pattern.has_value() && s3_read_buffer_creator_)
         {
             std::unique_ptr<StorageS3Source::IIterator> basic_iterator = std::make_unique<StorageS3Source::DisclosedGlobIterator>(
                 *configuration.client,
@@ -1324,7 +1345,7 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
                 configuration.request_settings,
                 file_progress_callback);
             return std::make_shared<StorageS3Source::ArchiveIterator>(
-                std::move(basic_iterator), configuration.url.archive_pattern.value(), nullptr);
+                std::move(basic_iterator), configuration.url.archive_pattern.value(), s3_read_buffer_creator_);
         }
         else
         {
@@ -1353,7 +1374,7 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
             VirtualColumnUtils::filterByPathOrFile(keys, paths, filter_dag, virtual_columns, local_context);
         }
 
-        if (configuration.url.archive_pattern.has_value() && main_call)
+        if (configuration.url.archive_pattern.has_value() && s3_read_buffer_creator_)
         {
             std::unique_ptr<StorageS3Source::IIterator> basic_iterator = std::make_unique<StorageS3Source::KeysIterator>(
                 *configuration.client,
@@ -1365,7 +1386,7 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
                 read_keys,
                 file_progress_callback);
             return std::make_shared<StorageS3Source::ArchiveIterator>(
-                std::move(basic_iterator), configuration.url.archive_pattern.value(), nullptr);
+                std::move(basic_iterator), configuration.url.archive_pattern.value(), s3_read_buffer_creator_);
         }
         else
         {
@@ -1433,12 +1454,19 @@ void ReadFromStorageS3Step::applyFilters(ActionDAGNodes added_filter_nodes)
     const ActionsDAG::Node * predicate = nullptr;
     if (filter_actions_dag)
         predicate = filter_actions_dag->getOutputs().at(0);
-
-    createIterator(predicate);
+    auto read_buffer_creator = std::make_shared<S3ReadBufferCreator>(
+        query_configuration.client,
+        query_configuration.url.bucket,
+        query_configuration.url.version_id,
+        query_configuration.request_settings,
+        getContext());
+    createIterator(predicate, read_buffer_creator);
 }
 
-void ReadFromStorageS3Step::createIterator(const ActionsDAG::Node * predicate)
+void ReadFromStorageS3Step::createIterator(
+    const ActionsDAG::Node * predicate, std::shared_ptr<const S3ReadBufferCreator> read_buffer_creator)
 {
+    LOG_DEBUG(&Poco::Logger::get("creating iterator"), "{} {}", read_buffer_creator.get() == nullptr, iterator_wrapper.get() == nullptr);
     if (iterator_wrapper)
         return;
 
@@ -1448,7 +1476,7 @@ void ReadFromStorageS3Step::createIterator(const ActionsDAG::Node * predicate)
         context,
         predicate,
         virtual_columns,
-        true,
+        read_buffer_creator,
         nullptr,
         context->getFileProgressCallback());
 }
@@ -1458,16 +1486,19 @@ void ReadFromStorageS3Step::initializePipeline(QueryPipelineBuilder & pipeline, 
     if (storage.partition_by && query_configuration.withWildcard())
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Reading from a partitioned S3 storage is not implemented yet");
 
-    createIterator(nullptr);
-
+    auto read_buffer_creator = std::make_shared<S3ReadBufferCreator>(
+        query_configuration.client,
+        query_configuration.url.bucket,
+        query_configuration.url.version_id,
+        query_configuration.request_settings,
+        getContext());
+    createIterator(nullptr, read_buffer_creator);
     size_t estimated_keys_count = iterator_wrapper->estimatedKeysCount();
     if (estimated_keys_count > 1)
         num_streams = std::min(num_streams, estimated_keys_count);
     else
         /// Disclosed glob iterator can underestimate the amount of keys in some cases. We will keep one stream for this particular case.
         num_streams = 1;
-
-    num_streams = 1;
 
     const size_t max_threads = context->getSettingsRef().max_threads;
     const size_t max_parsing_threads = num_streams >= max_threads ? 1 : (max_threads / std::max(num_streams, 1ul));
@@ -1492,26 +1523,27 @@ void ReadFromStorageS3Step::initializePipeline(QueryPipelineBuilder & pipeline, 
             query_configuration.url.uri.getHost() + std::to_string(query_configuration.url.uri.getPort()),
             iterator_wrapper,
             max_parsing_threads,
-            need_only_count);
+            need_only_count,
+            read_buffer_creator);
 
         source->setKeyCondition(filter_actions_dag, context);
         pipes.emplace_back(std::move(source));
     }
 
-    LOG_DEBUG(getLogger("Kek1"), "Kek1");
+    //LOG_DEBUG(getLogger("Kek1"), "Kek1");
 
     auto pipe = Pipe::unitePipes(std::move(pipes));
-    LOG_DEBUG(getLogger("Kek2"), "Kek2");
+    //LOG_DEBUG(getLogger("Kek2"), "Kek2");
     if (pipe.empty())
         pipe = Pipe(std::make_shared<NullSource>(read_from_format_info.source_header));
 
-    LOG_DEBUG(getLogger("Kek3"), "Kek3");
+    //LOG_DEBUG(getLogger("Kek3"), "Kek3");
     for (const auto & processor : pipe.getProcessors())
         processors.emplace_back(processor);
-    LOG_DEBUG(getLogger("Kek4"), "Kek4");
+    //LOG_DEBUG(getLogger("Kek4"), "Kek4");
 
     pipeline.init(std::move(pipe));
-    LOG_DEBUG(getLogger("Kek5"), "Kek5");
+    //LOG_DEBUG(getLogger("Kek5"), "Kek5");
 }
 
 SinkToStoragePtr StorageS3::write(const ASTPtr & query, const StorageMetadataPtr & metadata_snapshot, ContextPtr local_context, bool /*async_insert*/)
@@ -2213,7 +2245,14 @@ std::pair<ColumnsDescription, String> StorageS3::getTableStructureAndFormatFromD
 {
     KeysWithInfo read_keys;
 
-    auto file_iterator = createFileIterator(configuration, false, ctx, {}, {}, false, &read_keys);
+    auto read_buffer_creator = std::make_shared<S3ReadBufferCreator>(
+        configuration.client,
+        configuration.url.bucket,
+        configuration.url.version_id,
+        configuration.request_settings,
+        ctx);
+
+    auto file_iterator = createFileIterator(configuration, false, ctx, {}, {}, read_buffer_creator, &read_keys);
 
     ReadBufferIterator read_buffer_iterator(file_iterator, read_keys, configuration, format, format_settings, ctx);
     if (format)

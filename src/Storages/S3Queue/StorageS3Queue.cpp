@@ -373,7 +373,11 @@ std::shared_ptr<StorageS3QueueSource> StorageS3Queue::createSource(
     auto configuration_snapshot = updateConfigurationAndGetCopy(local_context);
 
     auto internal_source = std::make_unique<StorageS3Source>(
-        info, configuration.format, getName(), local_context, format_settings,
+        info,
+        configuration.format,
+        getName(),
+        local_context,
+        format_settings,
         max_block_size,
         configuration_snapshot.request_settings,
         configuration_snapshot.compression_method,
@@ -381,7 +385,10 @@ std::shared_ptr<StorageS3QueueSource> StorageS3Queue::createSource(
         configuration_snapshot.url.bucket,
         configuration_snapshot.url.version_id,
         configuration_snapshot.url.uri.getHost() + std::to_string(configuration_snapshot.url.uri.getPort()),
-        file_iterator, local_context->getSettingsRef().max_download_threads, false);
+        file_iterator,
+        local_context->getSettingsRef().max_download_threads,
+        false,
+        nullptr);
 
     auto file_deleter = [this, bucket = configuration_snapshot.url.bucket, client = configuration_snapshot.client, blob_storage_log = BlobStorageLogWriter::create()](const std::string & path) mutable
     {
