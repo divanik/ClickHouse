@@ -61,6 +61,25 @@ private:
     LoggerPtr log = getLogger("S3ReadBufferCreator");
 };
 
+struct ArchiveHolder
+{
+    void setBuffer(std::string path_to_archive_, size_t archive_size_, std::unique_ptr<ReadBufferFromFileBase> initial_buffer_)
+    {
+        // path_to_archive = path_to_archive_;
+        // archive_size = archive_size_;
+        initial_buffer = std::move(initial_buffer_);
+        archive_reader = createArchiveReader(
+            path_to_archive_, [this]() { return std::move(initial_buffer); }, archive_size_);
+    }
+    ArchiveHolder() = default;
+    ArchiveHolder(ArchiveHolder && holder) noexcept = default;
+    // std::string path_to_archive;
+    // size_t archive_size;
+    std::unique_ptr<ReadBufferFromFileBase> initial_buffer{};
+    std::shared_ptr<IArchiveReader> archive_reader{};
+};
+
+
 class StorageS3Source : public SourceWithKeyCondition, WithContext
 {
 public:
@@ -234,25 +253,6 @@ private:
     Block sample_block;
     std::optional<FormatSettings> format_settings;
     std::shared_ptr<S3ReadBufferCreator> s3_read_buffer_creator;
-
-
-    struct ArchiveHolder
-    {
-        void setBuffer(std::string path_to_archive_, size_t archive_size_, std::unique_ptr<ReadBufferFromFileBase> initial_buffer_)
-        {
-            // path_to_archive = path_to_archive_;
-            // archive_size = archive_size_;
-            initial_buffer = std::move(initial_buffer_);
-            archive_reader = createArchiveReader(
-                path_to_archive_, [this]() { return std::move(initial_buffer); }, archive_size_);
-        }
-        ArchiveHolder() = default;
-        ArchiveHolder(ArchiveHolder && holder) noexcept = default;
-        // std::string path_to_archive;
-        // size_t archive_size;
-        std::unique_ptr<ReadBufferFromFileBase> initial_buffer{};
-        std::shared_ptr<IArchiveReader> archive_reader{};
-    };
 
     struct ReaderHolder
     {
@@ -471,8 +471,6 @@ private:
 
     bool parallelizeOutputAfterReading(ContextPtr context) const override;
 };
-String fileInsideArchive(const String & archive_name, const String & name_inside_archive);
-String removeArchiveName(const String & archive_name, const String & full_name);
 }
 
 #endif

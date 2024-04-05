@@ -676,7 +676,7 @@ StorageS3Source::KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
             basic_key_with_info_ptr = basic_iterator->next();
             refreshArchive();
             lock.unlock();
-            if (tmp_archive_reader->fileExists(fileInsideArchive(basic_key_with_info_ptr->key, std::get<String>(archive_pattern))))
+            if (tmp_archive_reader->fileExists(std::get<String>(archive_pattern)))
             {
                 return std::make_shared<StorageS3Source::KeyWithInfo>(
                     current_basic_key_with_info_ptr->key, std::nullopt, std::optional{std::get<String>(archive_pattern)});
@@ -699,15 +699,13 @@ StorageS3Source::KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
                 refreshArchive();
             }
             lock.unlock();
-            bool satisfies = (std::get<IArchiveReader::NameFilter>(archive_pattern))(
-                removeArchiveName(current_basic_key_with_info_ptr->key, current_filename));
+            LOG_DEBUG(&Poco::Logger::get("File inside archive"), "Filename: {}", current_filename);
+            bool satisfies = (std::get<IArchiveReader::NameFilter>(archive_pattern))(current_filename);
             LOG_DEBUG(&Poco::Logger::get("Lolchik"), "{} {}", current_basic_key_with_info_ptr->key, current_filename);
             if (satisfies)
             {
                 return std::make_shared<StorageS3Source::KeyWithInfo>(
-                    current_basic_key_with_info_ptr->key,
-                    std::nullopt,
-                    std::optional{removeArchiveName(current_basic_key_with_info_ptr->key, current_filename)});
+                    current_basic_key_with_info_ptr->key, std::nullopt, std::optional{current_filename});
             }
         }
     }
@@ -842,8 +840,7 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
             std::unique_ptr<ReadBufferFromFileBase> inter_buf
                 = s3_read_buffer_creator->createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
             archive_holder.setBuffer(key_with_info->key, key_with_info->info->size, std::move(inter_buf));
-            read_buf = archive_holder.archive_reader->readFile(
-                fileInsideArchive(key_with_info->key, key_with_info->path_in_archive.value()), true);
+            read_buf = archive_holder.archive_reader->readFile(key_with_info->path_in_archive.value(), true);
         }
 
         auto input_format = FormatFactory::instance().getInput(
@@ -1705,37 +1702,38 @@ bool StorageS3::Configuration::update(const ContextPtr & context)
     return true;
 }
 
-String fileInsideArchive(const String & archive_name, const String & name_inside_archive)
-{
-    String answer;
-    LOG_DEBUG(getLogger("Nuhai bebru"), "Nuhai bebru");
-    LOG_DEBUG(getLogger("Shrek"), "Archive: {}, Name inside: {}", archive_name, name_inside_archive);
-    answer.reserve(archive_name.size() + name_inside_archive.size() + 1);
-    size_t pos = archive_name.find_last_of('.');
-    assert(pos != std::string::npos);
-    std::copy(archive_name.begin(), archive_name.begin() + pos, std::back_inserter(answer));
-    answer.push_back('/');
-    std::copy(name_inside_archive.begin(), name_inside_archive.end(), std::back_inserter(answer));
-    answer.shrink_to_fit();
-    return answer;
-}
+// String fileInsideArchive(const String & archive_name, const String & name_inside_archive)
+// {
+//     String answer;
+//     LOG_DEBUG(getLogger("Nuhai bebru"), "Nuhai bebru");
+//     LOG_DEBUG(getLogger("Shrek"), "Archive: {}, Name inside: {}", archive_name, name_inside_archive);
+//     answer.reserve(archive_name.size() + name_inside_archive.size() + 1);
+//     size_t pos = archive_name.find_last_of('.');
+//     assert(pos != std::string::npos);
+//     std::copy(archive_name.begin(), archive_name.begin() + pos, std::back_inserter(answer));
+//     answer.push_back('/');
+//     std::copy(name_inside_archive.begin(), name_inside_archive.end(), std::back_inserter(answer));
+//     answer.shrink_to_fit();
+//     return answer;
+// }
 
-std::string removeArchiveName(const String & archive_name, const String & full_name)
-{
-    size_t dot_pos = archive_name.find_last_of('.');
-    assert(dot_pos != std::string::npos);
-    [[maybe_unused]] size_t archive_name_pos = full_name.find(std::string_view{archive_name.begin(), archive_name.begin() + dot_pos});
-    assert(archive_names_pos == 0);
-    if (dot_pos + 1 <= full_name.size())
-        return std::string{full_name.begin() + dot_pos + 1, full_name.end()};
-    else
-        return {};
-    // std::copy(archive_name.begin(), archive_name.begin() + pos, std::back_inserter(answer));
-    // answer.push_back('/');
-    // std::copy(name_inside_archive.begin(), name_inside_archive.end(), std::back_inserter(answer));
-    // answer.shrink_to_fit();
-    // return answer;
-}
+// std::string removeArchiveName(const String & archive_name, const String & full_name)
+// {
+//     size_t dot_pos = archive_name.find('.');
+//     assert(dot_pos != std::string::npos);
+//     assert(
+//         (std::string_view{archive_name.begin(), archive_name.begin() + dot_pos}
+//          == std::string_view{full_name.begin(), full_name.begin() + dot_pos}));
+//     if (dot_pos + 1 <= full_name.size())
+//         return std::string{full_name.begin() + dot_pos + 1, full_name.end()};
+//     else
+//         return {};
+//     // std::copy(archive_name.begin(), archive_name.begin() + pos, std::back_inserter(answer));
+//     // answer.push_back('/');
+//     // std::copy(name_inside_archive.begin(), name_inside_archive.end(), std::back_inserter(answer));
+//     // answer.shrink_to_fit();
+//     // return answer;
+// }
 
 
 void StorageS3::Configuration::connect(const ContextPtr & context)
@@ -2009,6 +2007,7 @@ namespace
                 {
                     for (const auto & key_with_info : read_keys)
                     {
+                        LOG_DEBUG(&Poco::Logger::get("Format Inference 0"), "Key: {}", key_with_info->key);
                         if (auto format_from_file_name = FormatFactory::instance().tryGetFormatFromFileName(key_with_info->key))
                         {
                             format = format_from_file_name;
@@ -2028,6 +2027,12 @@ namespace
             while (true)
             {
                 current_key_with_info = (*file_iterator)();
+
+                LOG_DEBUG(
+                    &Poco::Logger::get("Schema Inference"),
+                    "File info: {} {}",
+                    current_key_with_info->key,
+                    current_key_with_info->path_in_archive.has_value() ? current_key_with_info->path_in_archive.value() : "Empty path");
 
                 if (!current_key_with_info || current_key_with_info->key.empty())
                 {
@@ -2049,6 +2054,9 @@ namespace
                     return {nullptr, std::nullopt, format};
                 }
 
+
+                LOG_DEBUG(&Poco::Logger::get("Format Inference 1"), "Read keys size: {}", read_keys.size());
+
                 /// S3 file iterator could get new keys after new iteration
                 if (read_keys.size() > prev_read_keys_size)
                 {
@@ -2057,6 +2065,7 @@ namespace
                     {
                         for (auto it = read_keys.begin() + prev_read_keys_size; it != read_keys.end(); ++it)
                         {
+                            LOG_DEBUG(&Poco::Logger::get("Format Inference"), "Key: {}", (*it)->key);
                             if (auto format_from_file_name = FormatFactory::instance().tryGetFormatFromFileName((*it)->key))
                             {
                                 format = format_from_file_name;
@@ -2076,6 +2085,16 @@ namespace
                     prev_read_keys_size = read_keys.size();
                 }
 
+                if (!format)
+                {
+                    if (current_key_with_info->path_in_archive.has_value())
+                    {
+                        if (auto format_from_file_name
+                            = FormatFactory::instance().tryGetFormatFromFileName(current_key_with_info->path_in_archive.value()))
+                            format = format_from_file_name;
+                    }
+                }
+
                 if (getContext()->getSettingsRef().s3_skip_empty_files && current_key_with_info->info && current_key_with_info->info->size == 0)
                     continue;
 
@@ -2091,7 +2110,52 @@ namespace
                 }
 
                 int zstd_window_log_max = static_cast<int>(getContext()->getSettingsRef().zstd_window_log_max);
-                auto impl = std::make_unique<ReadBufferFromS3>(configuration.client, configuration.url.bucket, current_key_with_info->key, configuration.url.version_id, configuration.request_settings, getContext()->getReadSettings());
+                std::unique_ptr<ReadBufferFromFileBase> impl;
+                if (!current_key_with_info->info)
+                    current_key_with_info->info = S3::getObjectInfo(
+                        *configuration.client,
+                        configuration.url.bucket,
+                        current_key_with_info->key,
+                        configuration.url.version_id,
+                        configuration.request_settings);
+                LOG_DEBUG(
+                    &Poco::Logger::get("Schema Inference 2"),
+                    "File info: key: {} size: {} archive path: {} format: {}",
+                    current_key_with_info->key,
+                    current_key_with_info->info->size,
+                    current_key_with_info->path_in_archive.has_value() ? current_key_with_info->path_in_archive.value() : "Empty path",
+                    format.has_value() ? format.value() : "No format");
+                if (!current_key_with_info->path_in_archive.has_value())
+                {
+                    impl = std::make_unique<ReadBufferFromS3>(
+                        configuration.client,
+                        configuration.url.bucket,
+                        current_key_with_info->key,
+                        configuration.url.version_id,
+                        configuration.request_settings,
+                        getContext()->getReadSettings());
+                }
+                else
+                {
+                    std::unique_ptr<ReadBufferFromFileBase> inter_buf = std::make_unique<ReadBufferFromS3>(
+                        configuration.client,
+                        configuration.url.bucket,
+                        current_key_with_info->key,
+                        configuration.url.version_id,
+                        configuration.request_settings,
+                        getContext()->getReadSettings());
+                    LOG_DEBUG(&Poco::Logger::get("Debug 100"), "");
+                    archive_holder.setBuffer(current_key_with_info->key, current_key_with_info->info->size, std::move(inter_buf));
+                    LOG_DEBUG(&Poco::Logger::get("Debug 101"), "");
+                    impl = archive_holder.archive_reader->readFile(current_key_with_info->path_in_archive.value(), true);
+                }
+                LOG_DEBUG(
+                    &Poco::Logger::get("Schema Inference 3"),
+                    "File info: {} {}",
+                    current_key_with_info->key,
+                    current_key_with_info->path_in_archive.has_value() ? current_key_with_info->path_in_archive.value() : "Empty path");
+
+                // auto impl = std::make_unique<ReadBufferFromS3>(configuration.client, configuration.url.bucket, current_key_with_info->key, configuration.url.version_id, configuration.request_settings, getContext()->getReadSettings());
                 if (!getContext()->getSettingsRef().s3_skip_empty_files || !impl->eof())
                 {
                     first = false;
@@ -2233,6 +2297,7 @@ namespace
         StorageS3Source::KeyWithInfoPtr current_key_with_info;
         size_t prev_read_keys_size;
         bool first = true;
+        ArchiveHolder archive_holder{};
     };
 
 }
