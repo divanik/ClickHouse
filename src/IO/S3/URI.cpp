@@ -53,7 +53,6 @@ URI::URI(const std::string & uri_)
 
     std::string temporal_uri = uri_;
     parseURIAndPathInsideArchive(std::move(temporal_uri), temporal_uri, archive_pattern);
-    LOG_DEBUG(&Poco::Logger::get("Parser"), "Main uri: {}, Archive path: {}", temporal_uri, archive_pattern.value());
     uri = Poco::URI(temporal_uri);
 
     std::unordered_map<std::string, std::string> mapper;

@@ -53,7 +53,6 @@ public:
     std::unique_ptr<ReadBufferFromFileBase>
     createAsyncS3ReadBuffer(const String & key, const ReadSettings & read_settings, size_t object_size) const;
 
-private:
     std::shared_ptr<const S3::Client> client;
     String bucket;
     String version_id;
@@ -63,19 +62,29 @@ private:
 
 struct ArchiveHolder
 {
-    void setBuffer(std::string path_to_archive_, size_t archive_size_, std::unique_ptr<ReadBufferFromFileBase> initial_buffer_)
+    ArchiveHolder(std::string path_to_archive_, size_t archive_size_, std::shared_ptr<const S3ReadBufferCreator> source_)
+        : path_to_archive(path_to_archive_), archive_size(archive_size_), source(source_)
     {
-        // path_to_archive = path_to_archive_;
-        // archive_size = archive_size_;
-        initial_buffer = std::move(initial_buffer_);
         archive_reader = createArchiveReader(
-            path_to_archive_, [this]() { return std::move(initial_buffer); }, archive_size_);
+            path_to_archive_, [this]() { return source->createS3ReadBuffer(path_to_archive, archive_size); }, archive_size_);
     }
+    // void setBuffer(std::string path_to_archive_, size_t archive_size_, std::unique_ptr<ReadBufferFromFileBase> initial_buffer_)
+    // {
+    //     initial_buffer = std::move(initial_buffer_);
+    //     archive_reader = createArchiveReader(
+    //         path_to_archive_,
+    //         [this]() { return source->createS3ReadBuffer(basic_key_with_info_ptr->key, basic_key_with_info_ptr->info->size); },
+    //         basic_key_with_info_ptr->info.has_value() ? basic_key_with_info_ptr->info.value().size : 0);
+    // }
+    // getArchiveReader(){archive_reader}
     ArchiveHolder() = default;
     ArchiveHolder(ArchiveHolder && holder) noexcept = default;
-    // std::string path_to_archive;
-    // size_t archive_size;
-    std::unique_ptr<ReadBufferFromFileBase> initial_buffer{};
+
+    std::shared_ptr<IArchiveReader> getArchiveReader() const { return archive_reader; }
+
+    std::string path_to_archive{};
+    size_t archive_size{};
+    std::shared_ptr<const S3ReadBufferCreator> source{};
     std::shared_ptr<IArchiveReader> archive_reader{};
 };
 
@@ -88,8 +97,11 @@ public:
         KeyWithInfo() = default;
 
         explicit KeyWithInfo(
-            String key_, std::optional<S3::ObjectInfo> info_ = std::nullopt, std::optional<String> path_in_archive_ = std::nullopt)
-            : key(std::move(key_)), info(std::move(info_)), path_in_archive(path_in_archive_)
+            String key_,
+            std::optional<S3::ObjectInfo> info_ = std::nullopt,
+            std::optional<String> path_in_archive_ = std::nullopt,
+            std::shared_ptr<ArchiveHolder> archive_holder_ = nullptr)
+            : key(std::move(key_)), info(std::move(info_)), path_in_archive(path_in_archive_), archive_holder(std::move(archive_holder_))
         {
         }
 
@@ -98,6 +110,7 @@ public:
         String key;
         std::optional<S3::ObjectInfo> info;
         std::optional<String> path_in_archive;
+        std::shared_ptr<ArchiveHolder> archive_holder;
     };
     using KeyWithInfoPtr = std::shared_ptr<KeyWithInfo>;
 
@@ -188,14 +201,13 @@ public:
 
         KeyWithInfoPtr next(size_t) override; /// NOLINT
         size_t estimatedKeysCount() override;
-        // void getSourceAndFinishInitialization(const StorageS3Source * source_) override;
 
     private:
         void refreshArchive();
         std::unique_ptr<IIterator> basic_iterator;
         StorageS3Source::KeyWithInfoPtr basic_key_with_info_ptr;
         std::unique_ptr<ReadBufferFromFileBase> basic_read_buffer;
-        std::shared_ptr<IArchiveReader> archive_reader{nullptr};
+        std::shared_ptr<ArchiveHolder> archive_holder{nullptr};
         std::unique_ptr<IArchiveReader::FileEnumerator> file_enumerator = nullptr;
         std::variant<String, IArchiveReader::NameFilter> archive_pattern;
         std::shared_ptr<const S3ReadBufferCreator> source;
@@ -264,7 +276,7 @@ private:
             std::shared_ptr<ISource> source_,
             std::unique_ptr<QueryPipeline> pipeline_,
             std::unique_ptr<PullingPipelineExecutor> reader_,
-            ArchiveHolder archive_holder_)
+            std::shared_ptr<ArchiveHolder> archive_holder_)
             : key_with_info(key_with_info_)
             , bucket(std::move(bucket_))
             , read_buf(std::move(read_buf_))
@@ -311,7 +323,7 @@ private:
         std::shared_ptr<ISource> source;
         std::unique_ptr<QueryPipeline> pipeline;
         std::unique_ptr<PullingPipelineExecutor> reader;
-        ArchiveHolder archive_holder;
+        std::shared_ptr<ArchiveHolder> archive_holder;
     };
 
     ReaderHolder reader;

@@ -669,17 +669,20 @@ StorageS3Source::KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
         while (true)
         {
             std::unique_lock lock{take_next_mutex};
-            if (!archive_reader)
+            if (!archive_holder)
                 return {};
             StorageS3Source::KeyWithInfoPtr current_basic_key_with_info_ptr = basic_key_with_info_ptr;
-            std::shared_ptr<IArchiveReader> tmp_archive_reader = archive_reader;
+            std::shared_ptr<ArchiveHolder> current_archive_holder = archive_holder;
             basic_key_with_info_ptr = basic_iterator->next();
             refreshArchive();
             lock.unlock();
-            if (tmp_archive_reader->fileExists(std::get<String>(archive_pattern)))
+            if (current_archive_holder->getArchiveReader()->fileExists(std::get<String>(archive_pattern)))
             {
                 return std::make_shared<StorageS3Source::KeyWithInfo>(
-                    current_basic_key_with_info_ptr->key, std::nullopt, std::optional{std::get<String>(archive_pattern)});
+                    current_basic_key_with_info_ptr->key,
+                    std::nullopt,
+                    std::optional{std::get<String>(archive_pattern)},
+                    current_archive_holder);
             }
         }
     }
@@ -688,11 +691,11 @@ StorageS3Source::KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
         while (true)
         {
             std::unique_lock lock{take_next_mutex};
-            if (!archive_reader)
+            if (!archive_holder)
                 return {};
             StorageS3Source::KeyWithInfoPtr current_basic_key_with_info_ptr = basic_key_with_info_ptr;
             String current_filename = file_enumerator->getFileName();
-            std::shared_ptr<IArchiveReader> current_archive_reader = archive_reader;
+            std::shared_ptr<ArchiveHolder> current_archive_holder = archive_holder;
             if (!file_enumerator->nextFile())
             {
                 basic_key_with_info_ptr = basic_iterator->next();
@@ -705,7 +708,7 @@ StorageS3Source::KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
             if (satisfies)
             {
                 return std::make_shared<StorageS3Source::KeyWithInfo>(
-                    current_basic_key_with_info_ptr->key, std::nullopt, std::optional{current_filename});
+                    current_basic_key_with_info_ptr->key, std::nullopt, std::optional{current_filename}, current_archive_holder);
             }
         }
     }
@@ -721,16 +724,22 @@ void StorageS3Source::ArchiveIterator::refreshArchive()
     if (basic_key_with_info_ptr)
     {
         // basic_read_buffer =
-        archive_reader = createArchiveReader(
+        if (!basic_key_with_info_ptr->info)
+        {
+            basic_key_with_info_ptr->info = S3::getObjectInfo(
+                *(source->client), source->bucket, basic_key_with_info_ptr->key, source->version_id, source->request_settings);
+        }
+        LOG_DEBUG(&Poco::Logger::get("source_info"), "Bucket : {}", source->bucket);
+        archive_holder = std::make_shared<ArchiveHolder>(
             basic_key_with_info_ptr->key,
-            [this]() { return source->createS3ReadBuffer(basic_key_with_info_ptr->key, basic_key_with_info_ptr->info->size); },
-            basic_key_with_info_ptr->info.has_value() ? basic_key_with_info_ptr->info.value().size : 0);
-        file_enumerator = archive_reader->firstFile();
+            basic_key_with_info_ptr->info.has_value() ? basic_key_with_info_ptr->info.value().size : 0,
+            source);
+        file_enumerator = archive_holder->getArchiveReader()->firstFile();
     }
     else
     {
         basic_read_buffer = nullptr;
-        archive_reader = nullptr;
+        archive_holder = nullptr;
         file_enumerator = nullptr;
     }
 }
@@ -807,7 +816,7 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
     QueryPipelineBuilder builder;
     std::shared_ptr<ISource> source;
     std::unique_ptr<ReadBuffer> read_buf;
-    ArchiveHolder archive_holder{};
+    std::shared_ptr<ArchiveHolder> archive_holder = key_with_info->archive_holder;
 
     std::optional<size_t> num_rows_from_cache = need_only_count && getContext()->getSettingsRef().use_cache_for_count_from_files ? tryGetNumRowsFromCache(*key_with_info) : std::nullopt;
     if (num_rows_from_cache)
@@ -837,12 +846,8 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
         {
             LOG_DEBUG(
                 &Poco::Logger::get("Archive structure"), "Path: {}, Name: {}", key_with_info->key, key_with_info->path_in_archive.value());
-            std::unique_ptr<ReadBufferFromFileBase> inter_buf
-                = s3_read_buffer_creator->createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
-            archive_holder.setBuffer(key_with_info->key, key_with_info->info->size, std::move(inter_buf));
-            read_buf = archive_holder.archive_reader->readFile(key_with_info->path_in_archive.value(), true);
+            read_buf = archive_holder->getArchiveReader()->readFile(key_with_info->path_in_archive.value(), true);
         }
-
         auto input_format = FormatFactory::instance().getInput(
             format,
             *read_buf,
@@ -2137,17 +2142,19 @@ namespace
                 }
                 else
                 {
-                    std::unique_ptr<ReadBufferFromFileBase> inter_buf = std::make_unique<ReadBufferFromS3>(
-                        configuration.client,
-                        configuration.url.bucket,
-                        current_key_with_info->key,
-                        configuration.url.version_id,
-                        configuration.request_settings,
-                        getContext()->getReadSettings());
-                    LOG_DEBUG(&Poco::Logger::get("Debug 100"), "");
-                    archive_holder.setBuffer(current_key_with_info->key, current_key_with_info->info->size, std::move(inter_buf));
-                    LOG_DEBUG(&Poco::Logger::get("Debug 101"), "");
-                    impl = archive_holder.archive_reader->readFile(current_key_with_info->path_in_archive.value(), true);
+                    assert(current_key_with_info->archive_holder->getArchiveReader());
+                    // std::unique_ptr<ReadBufferFromFileBase> inter_buf = std::make_unique<ReadBufferFromS3>(
+                    //     configuration.client,
+                    //     configuration.url.bucket,
+                    //     current_key_with_info->key,
+                    //     configuration.url.version_id,
+                    //     configuration.request_settings,
+                    //     getContext()->getReadSettings());
+                    // // LOG_DEBUG(&Poco::Logger::get("Debug 100"), "");
+                    // // ;
+                    // LOG_DEBUG(&Poco::Logger::get("Debug 101"), "");
+                    impl = current_key_with_info->archive_holder->getArchiveReader()->readFile(
+                        current_key_with_info->path_in_archive.value(), true);
                 }
                 LOG_DEBUG(
                     &Poco::Logger::get("Schema Inference 3"),
