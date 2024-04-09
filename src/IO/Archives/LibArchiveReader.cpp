@@ -1,4 +1,3 @@
-#include <cstddef>
 #include <IO/Archives/ArchiveUtils.h>
 #include <IO/Archives/LibArchiveReader.h>
 #include <IO/ReadBufferFromFileBase.h>
@@ -39,15 +38,15 @@ class LibArchiveReader::Handle
 {
 public:
     explicit Handle(std::string path_to_archive_, bool lock_on_reading_)
-        : path_to_archive(std::move(path_to_archive_)), archive_read_function(nullptr), lock_on_reading(lock_on_reading_)
+        : path_to_archive(std::move(path_to_archive_)), lock_on_reading(lock_on_reading_)
     {
         current_archive = openWithPath(path_to_archive);
     }
 
     explicit Handle(std::string path_to_archive_, bool lock_on_reading_, const ReadArchiveFunction & archive_read_function_)
-        : path_to_archive(std::move(path_to_archive_)), archive_read_function(&archive_read_function_), lock_on_reading(lock_on_reading_)
+        : path_to_archive(std::move(path_to_archive_)), archive_read_function(archive_read_function_), lock_on_reading(lock_on_reading_)
     {
-        read_stream = std::make_unique<StreamInfo>((*archive_read_function)());
+        read_stream = std::make_unique<StreamInfo>(archive_read_function());
         current_archive = openWithReader(read_stream.get());
     }
 
@@ -56,7 +55,7 @@ public:
         : read_stream(std::move(other.read_stream))
         , current_archive(other.current_archive)
         , current_entry(other.current_entry)
-        , archive_read_function(other.archive_read_function)
+        , archive_read_function(std::move(other.archive_read_function))
         , lock_on_reading(other.lock_on_reading)
 
     {
@@ -114,7 +113,7 @@ public:
     std::vector<std::string> getAllFiles(NameFilter filter)
     {
         std::unique_ptr<LibArchiveReader::StreamInfo> rs
-            = archive_read_function ? std::make_unique<StreamInfo>((*archive_read_function)()) : nullptr;
+            = archive_read_function ? std::make_unique<StreamInfo>(archive_read_function()) : nullptr;
         auto * archive = rs ? openWithReader(rs.get()) : openWithPath(path_to_archive);
 
         SCOPE_EXIT(close(archive););
@@ -275,7 +274,7 @@ private:
     Archive current_archive;
     Entry current_entry = nullptr;
     bool valid = true;
-    const IArchiveReader::ReadArchiveFunction * archive_read_function;
+    IArchiveReader::ReadArchiveFunction archive_read_function;
 
     /// for some archive types when we are reading headers static variables are used
     /// which are not thread-safe

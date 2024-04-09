@@ -1,2 +1,9 @@
--- SELECT * FROM s3('http://localhost:11111/test/03036_archive1.zip :: example1.csv', 'NOSIGN') ORDER BY id;
 SELECT * FROM s3(s3_conn, filename='03036_archive1.zip :: example1.csv') ORDER BY id;
+SELECT * FROM s3(s3_conn, filename='03036_archive2.zip :: example*.csv') ORDER BY id;
+SELECT * FROM s3(s3_conn, filename='03036_archive*.zip :: example2.csv') ORDER BY id;
+SELECT * FROM s3(s3_conn, filename='03036_archive*.zip :: example*') ORDER BY id;
+SELECT * FROM s3(s3_conn, filename='03036_archive1.tar :: example1.csv') ORDER BY id;
+SELECT * FROM s3(s3_conn, filename='03036_archive*.tar :: example4.csv') ORDER BY id;
+SELECT * FROM s3(s3_conn, filename='03036_archive2.tar :: example*.csv') ORDER BY id;
+SELECT * FROM s3(s3_conn, filename='03036_archive* :: example*.csv') ORDER BY id;
+SELECT * FROM s3(s3_conn, filename='03036_archive* :: *') ORDER BY id;
