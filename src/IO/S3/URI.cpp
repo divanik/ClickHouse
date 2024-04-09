@@ -3,7 +3,6 @@
 #include <Storages/NamedCollectionsHelpers.h>
 #include <Poco/URI.h>
 #include "Common/Macros.h"
-#include "Common/logger_useful.h"
 #if USE_AWS_S3
 #include <Common/Exception.h>
 #include <Common/quoteString.h>
@@ -122,7 +121,7 @@ URI::URI(const std::string & uri_)
         /// For S3Express it will look like s3express-eun1-az1, i.e. contain region and AZ info
         if (name != S3 && !name.starts_with(S3EXPRESS) && name != COS && name != OBS && name != OSS && name != EOS)
             throw Exception(
-                ::DB::ErrorCodes::BAD_ARGUMENTS,
+                ErrorCodes::BAD_ARGUMENTS,
                 "Object storage system name is unrecognized in virtual hosted style S3 URI: {}",
                 quoteString(name));
 
@@ -138,7 +137,7 @@ URI::URI(const std::string & uri_)
         validateBucket(bucket, uri);
     }
     else
-        throw Exception(::DB::ErrorCodes::BAD_ARGUMENTS, "Bucket or key name are invalid in S3 URI.");
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Bucket or key name are invalid in S3 URI.");
 }
 
 void URI::addRegionToURI(const std::string &region)
@@ -153,7 +152,7 @@ void URI::validateBucket(const String & bucket, const Poco::URI & uri)
     /// https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-s3-bucket-naming-requirements.html
     if (bucket.length() < 3 || bucket.length() > 63)
         throw Exception(
-            ::DB::ErrorCodes::BAD_ARGUMENTS,
+            ErrorCodes::BAD_ARGUMENTS,
             "Bucket name length is out of bounds in virtual hosted style S3 URI: {}{}",
             quoteString(bucket),
             !uri.empty() ? " (" + uri.toString() + ")" : "");

@@ -9,6 +9,7 @@
 #include "Core/Types.h"
 #include "IO/Archives/IArchiveReader.h"
 #include "IO/Archives/createArchiveReader.h"
+#include "IO/CompressionMethod.h"
 #include "IO/ReadBuffer.h"
 #include "IO/ReadBufferFromFileBase.h"
 #include "Interpreters/Context_fwd.h"
@@ -82,13 +83,13 @@
 #include <QueryPipeline/Pipe.h>
 #include <filesystem>
 
-#    include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string.hpp>
 
 
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant"
-#    include <re2/re2.h>
-#    pragma clang diagnostic pop
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant"
+#include <re2/re2.h>
+#pragma clang diagnostic pop
 
 namespace fs = std::filesystem;
 
@@ -235,7 +236,6 @@ public:
         /// We don't have to list bucket, because there is no asterisks.
         if (key_prefix.size() == globbed_uri.key.size())
         {
-            LOG_DEBUG(&Poco::Logger::get("Path in archive exists"), "Has value: {}", path_in_archive_.has_value());
             buffer.emplace_back(std::make_shared<KeyWithInfo>(globbed_uri.key, std::nullopt, archive_pattern));
             buffer_iter = buffer.begin();
             is_finished = true;
@@ -510,7 +510,6 @@ public:
         std::optional<S3::ObjectInfo> info;
         if (file_progress_callback)
         {
-            LOG_DEBUG(&Poco::Logger::get("Object Info"), "Bucket: {}, Key: {}", bucket, key);
             info = S3::getObjectInfo(*client, bucket, key, version_id, request_settings);
             file_progress_callback(FileProgress(0, info->size));
         }
@@ -607,18 +606,13 @@ StorageS3Source::ArchiveIterator::ArchiveIterator(
     , archive_pattern(archive_pattern_)
     , source(source_)
 {
-    LOG_DEBUG(&Poco::Logger::get("Archive Iterator constructor"), "Archive Iterator constructor");
     std::string archive_pattern_string = std::get<std::string>(archive_pattern);
     if (archive_pattern_string.find_first_of("*?{") != std::string::npos)
     {
         auto matcher = std::make_shared<re2::RE2>(makeRegexpPatternFromGlobs(archive_pattern_string));
         if (!matcher->ok())
             throw Exception(
-                ErrorCodes::CANNOT_COMPILE_REGEXP,
-                "Cannot compile regex from glob ({}): {}",
-                archive_pattern_string,
-                matcher->error());
-        LOG_DEBUG(&Poco::Logger::get("Changing format"), "Changing format");
+                ErrorCodes::CANNOT_COMPILE_REGEXP, "Cannot compile regex from glob ({}): {}", archive_pattern_string, matcher->error());
         archive_pattern
             = IArchiveReader::NameFilter{[matcher, matcher_mutex = std::make_shared<std::mutex>()](const std::string & p) mutable
                                          {
@@ -629,41 +623,8 @@ StorageS3Source::ArchiveIterator::ArchiveIterator(
     refreshArchive();
 }
 
-// void StorageS3Source::ArchiveIterator::getSourceAndFinishInitialization(const S3ReadBufferCreator * source_)
-// {
-//     source = source_;
-//     std::string archive_pattern_string = std::get<std::string>(archive_pattern);
-//     if (archive_pattern_string.find_first_of("*?{") != std::string::npos)
-//     {
-//         auto matcher = std::make_shared<re2::RE2>(makeRegexpPatternFromGlobs(archive_pattern_string));
-//         if (!matcher->ok())
-//             throw Exception(
-//                 ErrorCodes::CANNOT_COMPILE_REGEXP,
-//                 "Cannot compile regex from glob ({}): {}",
-//                 archive_pattern_string,
-//                 matcher->error());
-
-//         archive_pattern
-//             = IArchiveReader::NameFilter{[matcher, matcher_mutex = std::make_shared<std::mutex>()](const std::string & p) mutable
-//                                          {
-//             std::lock_guard lock(*matcher_mutex);
-//             return re2::RE2::FullMatch(p, *matcher);
-//                                          }};
-//     }
-//     refreshArchive();
-// }
-
 StorageS3Source::KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
 {
-    // std::unique_lock lock{take_next_mutex};
-    // if (!archive_reader)
-    //     return {};
-    // lock.unlock();
-    // StorageS3Source::KeyWithInfoPtr basic_key_with_info_ptr_old = basic_key_with_info_ptr;
-    // if ()
-    // {
-    // }
-    // lock.unlock();
     if (std::holds_alternative<String>(archive_pattern))
     {
         while (true)
@@ -702,9 +663,7 @@ StorageS3Source::KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
                 refreshArchive();
             }
             lock.unlock();
-            LOG_DEBUG(&Poco::Logger::get("File inside archive"), "Filename: {}", current_filename);
             bool satisfies = (std::get<IArchiveReader::NameFilter>(archive_pattern))(current_filename);
-            LOG_DEBUG(&Poco::Logger::get("Lolchik"), "{} {}", current_basic_key_with_info_ptr->key, current_filename);
             if (satisfies)
             {
                 return std::make_shared<StorageS3Source::KeyWithInfo>(
@@ -723,13 +682,11 @@ void StorageS3Source::ArchiveIterator::refreshArchive()
 {
     if (basic_key_with_info_ptr)
     {
-        // basic_read_buffer =
         if (!basic_key_with_info_ptr->info)
         {
             basic_key_with_info_ptr->info = S3::getObjectInfo(
                 *(source->client), source->bucket, basic_key_with_info_ptr->key, source->version_id, source->request_settings);
         }
-        LOG_DEBUG(&Poco::Logger::get("source_info"), "Bucket : {}", source->bucket);
         archive_holder = std::make_shared<ArchiveHolder>(
             basic_key_with_info_ptr->key,
             basic_key_with_info_ptr->info.has_value() ? basic_key_with_info_ptr->info.value().size : 0,
@@ -831,22 +788,13 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
     }
     else
     {
-        // LOG_DEBUG(&Poco::Logger::get("Lolchik"), "Lolchik");
-        // LOG_DEBUG(&Poco::Logger::get("Lolchik"), "Lolchik");
-
-        LOG_DEBUG(&Poco::Logger::get("Archive name and size"), "Path: {}, Size: {}", key_with_info->key, key_with_info->info->size);
-
         auto compression_method = chooseCompressionMethod(key_with_info->key, compression_hint);
         if (!key_with_info->path_in_archive.has_value())
-        {
-            LOG_DEBUG(&Poco::Logger::get("Perchik"), "Perchik");
             read_buf = s3_read_buffer_creator->createS3ReadBuffer(key_with_info->key, key_with_info->info->size);
-        }
         else
         {
-            LOG_DEBUG(
-                &Poco::Logger::get("Archive structure"), "Path: {}, Name: {}", key_with_info->key, key_with_info->path_in_archive.value());
             read_buf = archive_holder->getArchiveReader()->readFile(key_with_info->path_in_archive.value(), true);
+            compression_method = CompressionMethod::None;
         }
         auto input_format = FormatFactory::instance().getInput(
             format,
@@ -1468,7 +1416,6 @@ void ReadFromStorageS3Step::applyFilters(ActionDAGNodes added_filter_nodes)
 void ReadFromStorageS3Step::createIterator(
     const ActionsDAG::Node * predicate, std::shared_ptr<const S3ReadBufferCreator> read_buffer_creator)
 {
-    LOG_DEBUG(&Poco::Logger::get("creating iterator"), "{} {}", read_buffer_creator.get() == nullptr, iterator_wrapper.get() == nullptr);
     if (iterator_wrapper)
         return;
 
@@ -1532,20 +1479,14 @@ void ReadFromStorageS3Step::initializePipeline(QueryPipelineBuilder & pipeline, 
         pipes.emplace_back(std::move(source));
     }
 
-    //LOG_DEBUG(getLogger("Kek1"), "Kek1");
-
     auto pipe = Pipe::unitePipes(std::move(pipes));
-    //LOG_DEBUG(getLogger("Kek2"), "Kek2");
     if (pipe.empty())
         pipe = Pipe(std::make_shared<NullSource>(read_from_format_info.source_header));
 
-    //LOG_DEBUG(getLogger("Kek3"), "Kek3");
     for (const auto & processor : pipe.getProcessors())
         processors.emplace_back(processor);
-    //LOG_DEBUG(getLogger("Kek4"), "Kek4");
 
     pipeline.init(std::move(pipe));
-    //LOG_DEBUG(getLogger("Kek5"), "Kek5");
 }
 
 SinkToStoragePtr StorageS3::write(const ASTPtr & query, const StorageMetadataPtr & metadata_snapshot, ContextPtr local_context, bool /*async_insert*/)
@@ -1706,40 +1647,6 @@ bool StorageS3::Configuration::update(const ContextPtr & context)
     connect(context);
     return true;
 }
-
-// String fileInsideArchive(const String & archive_name, const String & name_inside_archive)
-// {
-//     String answer;
-//     LOG_DEBUG(getLogger("Nuhai bebru"), "Nuhai bebru");
-//     LOG_DEBUG(getLogger("Shrek"), "Archive: {}, Name inside: {}", archive_name, name_inside_archive);
-//     answer.reserve(archive_name.size() + name_inside_archive.size() + 1);
-//     size_t pos = archive_name.find_last_of('.');
-//     assert(pos != std::string::npos);
-//     std::copy(archive_name.begin(), archive_name.begin() + pos, std::back_inserter(answer));
-//     answer.push_back('/');
-//     std::copy(name_inside_archive.begin(), name_inside_archive.end(), std::back_inserter(answer));
-//     answer.shrink_to_fit();
-//     return answer;
-// }
-
-// std::string removeArchiveName(const String & archive_name, const String & full_name)
-// {
-//     size_t dot_pos = archive_name.find('.');
-//     assert(dot_pos != std::string::npos);
-//     assert(
-//         (std::string_view{archive_name.begin(), archive_name.begin() + dot_pos}
-//          == std::string_view{full_name.begin(), full_name.begin() + dot_pos}));
-//     if (dot_pos + 1 <= full_name.size())
-//         return std::string{full_name.begin() + dot_pos + 1, full_name.end()};
-//     else
-//         return {};
-//     // std::copy(archive_name.begin(), archive_name.begin() + pos, std::back_inserter(answer));
-//     // answer.push_back('/');
-//     // std::copy(name_inside_archive.begin(), name_inside_archive.end(), std::back_inserter(answer));
-//     // answer.shrink_to_fit();
-//     // return answer;
-// }
-
 
 void StorageS3::Configuration::connect(const ContextPtr & context)
 {
@@ -2012,7 +1919,6 @@ namespace
                 {
                     for (const auto & key_with_info : read_keys)
                     {
-                        LOG_DEBUG(&Poco::Logger::get("Format Inference 0"), "Key: {}", key_with_info->key);
                         if (auto format_from_file_name = FormatFactory::instance().tryGetFormatFromFileName(key_with_info->key))
                         {
                             format = format_from_file_name;
@@ -2032,12 +1938,6 @@ namespace
             while (true)
             {
                 current_key_with_info = (*file_iterator)();
-
-                LOG_DEBUG(
-                    &Poco::Logger::get("Schema Inference"),
-                    "File info: {} {}",
-                    current_key_with_info->key,
-                    current_key_with_info->path_in_archive.has_value() ? current_key_with_info->path_in_archive.value() : "Empty path");
 
                 if (!current_key_with_info || current_key_with_info->key.empty())
                 {
@@ -2059,9 +1959,6 @@ namespace
                     return {nullptr, std::nullopt, format};
                 }
 
-
-                LOG_DEBUG(&Poco::Logger::get("Format Inference 1"), "Read keys size: {}", read_keys.size());
-
                 /// S3 file iterator could get new keys after new iteration
                 if (read_keys.size() > prev_read_keys_size)
                 {
@@ -2070,7 +1967,6 @@ namespace
                     {
                         for (auto it = read_keys.begin() + prev_read_keys_size; it != read_keys.end(); ++it)
                         {
-                            LOG_DEBUG(&Poco::Logger::get("Format Inference"), "Key: {}", (*it)->key);
                             if (auto format_from_file_name = FormatFactory::instance().tryGetFormatFromFileName((*it)->key))
                             {
                                 format = format_from_file_name;
@@ -2123,13 +2019,6 @@ namespace
                         current_key_with_info->key,
                         configuration.url.version_id,
                         configuration.request_settings);
-                LOG_DEBUG(
-                    &Poco::Logger::get("Schema Inference 2"),
-                    "File info: key: {} size: {} archive path: {} format: {}",
-                    current_key_with_info->key,
-                    current_key_with_info->info->size,
-                    current_key_with_info->path_in_archive.has_value() ? current_key_with_info->path_in_archive.value() : "Empty path",
-                    format.has_value() ? format.value() : "No format");
                 if (!current_key_with_info->path_in_archive.has_value())
                 {
                     impl = std::make_unique<ReadBufferFromS3>(
@@ -2143,30 +2032,21 @@ namespace
                 else
                 {
                     assert(current_key_with_info->archive_holder->getArchiveReader());
-                    // std::unique_ptr<ReadBufferFromFileBase> inter_buf = std::make_unique<ReadBufferFromS3>(
-                    //     configuration.client,
-                    //     configuration.url.bucket,
-                    //     current_key_with_info->key,
-                    //     configuration.url.version_id,
-                    //     configuration.request_settings,
-                    //     getContext()->getReadSettings());
-                    // // LOG_DEBUG(&Poco::Logger::get("Debug 100"), "");
-                    // // ;
-                    // LOG_DEBUG(&Poco::Logger::get("Debug 101"), "");
                     impl = current_key_with_info->archive_holder->getArchiveReader()->readFile(
                         current_key_with_info->path_in_archive.value(), true);
                 }
-                LOG_DEBUG(
-                    &Poco::Logger::get("Schema Inference 3"),
-                    "File info: {} {}",
-                    current_key_with_info->key,
-                    current_key_with_info->path_in_archive.has_value() ? current_key_with_info->path_in_archive.value() : "Empty path");
-
-                // auto impl = std::make_unique<ReadBufferFromS3>(configuration.client, configuration.url.bucket, current_key_with_info->key, configuration.url.version_id, configuration.request_settings, getContext()->getReadSettings());
                 if (!getContext()->getSettingsRef().s3_skip_empty_files || !impl->eof())
                 {
                     first = false;
-                    return {wrapReadBufferWithCompressionMethod(std::move(impl), chooseCompressionMethod(current_key_with_info->key, configuration.compression_method), zstd_window_log_max), std::nullopt, format};
+                    return {
+                        wrapReadBufferWithCompressionMethod(
+                            std::move(impl),
+                            current_key_with_info->path_in_archive.has_value()
+                                ? CompressionMethod::None
+                                : chooseCompressionMethod(current_key_with_info->key, configuration.compression_method),
+                            zstd_window_log_max),
+                        std::nullopt,
+                        format};
                 }
             }
         }

@@ -3,7 +3,6 @@
 #include <optional>
 #include <string>
 
-#include "Common/Exception.h"
 #include "config.h"
 
 #if USE_AWS_S3

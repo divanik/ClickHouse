@@ -68,15 +68,7 @@ struct ArchiveHolder
         archive_reader = createArchiveReader(
             path_to_archive_, [this]() { return source->createS3ReadBuffer(path_to_archive, archive_size); }, archive_size_);
     }
-    // void setBuffer(std::string path_to_archive_, size_t archive_size_, std::unique_ptr<ReadBufferFromFileBase> initial_buffer_)
-    // {
-    //     initial_buffer = std::move(initial_buffer_);
-    //     archive_reader = createArchiveReader(
-    //         path_to_archive_,
-    //         [this]() { return source->createS3ReadBuffer(basic_key_with_info_ptr->key, basic_key_with_info_ptr->info->size); },
-    //         basic_key_with_info_ptr->info.has_value() ? basic_key_with_info_ptr->info.value().size : 0);
-    // }
-    // getArchiveReader(){archive_reader}
+
     ArchiveHolder() = default;
     ArchiveHolder(ArchiveHolder && holder) noexcept = default;
 
