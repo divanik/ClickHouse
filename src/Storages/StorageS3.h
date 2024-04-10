@@ -133,7 +133,6 @@ public:
             const S3::URI & globbed_uri_,
             const ActionsDAG::Node * predicate,
             const NamesAndTypesList & virtual_columns,
-            const std::optional<String> & path_in_archive_,
             const ContextPtr & context,
             KeysWithInfo * read_keys_ = nullptr,
             const S3Settings::RequestSettings & request_settings_ = {},
@@ -156,7 +155,6 @@ public:
             const std::string & version_id_,
             const std::vector<String> & keys_,
             const String & bucket_,
-            const std::optional<String> & path_in_archive_,
             const S3Settings::RequestSettings & request_settings_,
             KeysWithInfo * read_keys = nullptr,
             std::function<void(FileProgress)> progress_callback_ = {});

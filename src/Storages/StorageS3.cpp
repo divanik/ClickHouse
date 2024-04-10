@@ -211,7 +211,6 @@ public:
         const S3::URI & globbed_uri_,
         const ActionsDAG::Node * predicate,
         const NamesAndTypesList & virtual_columns_,
-        const std::optional<String> & path_in_archive_,
         ContextPtr context_,
         KeysWithInfo * read_keys_,
         const S3Settings::RequestSettings & request_settings_,
@@ -222,7 +221,6 @@ public:
         , virtual_columns(virtual_columns_)
         , read_keys(read_keys_)
         , request_settings(request_settings_)
-        , archive_pattern(path_in_archive_)
         , list_objects_pool(
               CurrentMetrics::StorageS3Threads, CurrentMetrics::StorageS3ThreadsActive, CurrentMetrics::StorageS3ThreadsScheduled, 1)
         , list_objects_scheduler(threadPoolCallbackRunner<ListObjectsOutcome>(list_objects_pool, "ListObjects"))
@@ -446,21 +444,12 @@ StorageS3Source::DisclosedGlobIterator::DisclosedGlobIterator(
     const S3::URI & globbed_uri_,
     const ActionsDAG::Node * predicate,
     const NamesAndTypesList & virtual_columns_,
-    const std::optional<String> & path_in_archive_,
     const ContextPtr & context,
     KeysWithInfo * read_keys_,
     const S3Settings::RequestSettings & request_settings_,
     std::function<void(FileProgress)> file_progress_callback_)
     : pimpl(std::make_shared<StorageS3Source::DisclosedGlobIterator::Impl>(
-        client_,
-        globbed_uri_,
-        predicate,
-        virtual_columns_,
-        path_in_archive_,
-        context,
-        read_keys_,
-        request_settings_,
-        file_progress_callback_))
+        client_, globbed_uri_, predicate, virtual_columns_, context, read_keys_, request_settings_, file_progress_callback_))
 {
 }
 
@@ -482,7 +471,6 @@ public:
         const std::string & version_id_,
         const std::vector<String> & keys_,
         const String & bucket_,
-        std::optional<String> path_in_archive_,
         const S3Settings::RequestSettings & request_settings_,
         KeysWithInfo * read_keys_,
         std::function<void(FileProgress)> file_progress_callback_)
@@ -490,14 +478,13 @@ public:
         , client(client_.clone())
         , version_id(version_id_)
         , bucket(bucket_)
-        , path_in_archive(path_in_archive_)
         , request_settings(request_settings_)
         , file_progress_callback(file_progress_callback_)
     {
         if (read_keys_)
         {
             for (const auto & key : keys)
-                read_keys_->push_back(std::make_shared<KeyWithInfo>(key, std::nullopt, path_in_archive_));
+                read_keys_->push_back(std::make_shared<KeyWithInfo>(key, std::nullopt, std::nullopt));
         }
     }
 
@@ -514,7 +501,7 @@ public:
             file_progress_callback(FileProgress(0, info->size));
         }
 
-        return std::make_shared<KeyWithInfo>(key, info, path_in_archive);
+        return std::make_shared<KeyWithInfo>(key, info, std::nullopt);
     }
 
     size_t objectsCount()
@@ -528,7 +515,6 @@ private:
     std::unique_ptr<S3::Client> client;
     String version_id;
     String bucket;
-    std::optional<String> path_in_archive;
     S3Settings::RequestSettings request_settings;
     std::function<void(FileProgress)> file_progress_callback;
 };
@@ -538,12 +524,11 @@ StorageS3Source::KeysIterator::KeysIterator(
     const std::string & version_id_,
     const std::vector<String> & keys_,
     const String & bucket_,
-    const std::optional<String> & path_in_archive_,
     const S3Settings::RequestSettings & request_settings_,
     KeysWithInfo * read_keys,
     std::function<void(FileProgress)> file_progress_callback_)
     : pimpl(std::make_shared<StorageS3Source::KeysIterator::Impl>(
-        client_, version_id_, keys_, bucket_, path_in_archive_, request_settings_, read_keys, file_progress_callback_))
+        client_, version_id_, keys_, bucket_, request_settings_, read_keys, file_progress_callback_))
 {
 }
 
@@ -1289,7 +1274,6 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
                 configuration.url,
                 predicate,
                 virtual_columns,
-                configuration.url.archive_pattern,
                 local_context,
                 read_keys,
                 configuration.request_settings,
@@ -1304,7 +1288,6 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
                 configuration.url,
                 predicate,
                 virtual_columns,
-                configuration.url.archive_pattern,
                 local_context,
                 read_keys,
                 configuration.request_settings,
@@ -1331,7 +1314,6 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
                 configuration.url.version_id,
                 keys,
                 configuration.url.bucket,
-                configuration.url.archive_pattern,
                 configuration.request_settings,
                 read_keys,
                 file_progress_callback);
@@ -1345,7 +1327,6 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
                 configuration.url.version_id,
                 keys,
                 configuration.url.bucket,
-                configuration.url.archive_pattern,
                 configuration.request_settings,
                 read_keys,
                 file_progress_callback);
