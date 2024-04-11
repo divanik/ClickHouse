@@ -299,8 +299,17 @@ private:
         explicit operator bool() const { return reader != nullptr; }
         PullingPipelineExecutor * operator->() { return reader.get(); }
         const PullingPipelineExecutor * operator->() const { return reader.get(); }
-        String getPath() const { return fs::path(bucket) / key_with_info->key ; }
-        const String & getFile() const { return key_with_info->key; }
+        String getPath() const
+        {
+            return key_with_info->path_in_archive.has_value()
+                ? (bucket + "/" + key_with_info->key + "::" + key_with_info->path_in_archive.value())
+                : (bucket + "/" + key_with_info->key);
+        }
+        const String & getFile() const
+        {
+            return key_with_info->path_in_archive.has_value() ? key_with_info->path_in_archive.value() : key_with_info->key;
+        }
+        bool isArchive() { return key_with_info->path_in_archive.has_value(); }
         const KeyWithInfo & getKeyWithInfo() const { return *key_with_info; }
         std::optional<size_t> getFileSize() const { return key_with_info->info ? std::optional(key_with_info->info->size) : std::nullopt; }
 

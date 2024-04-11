@@ -961,7 +961,12 @@ Chunk StorageS3Source::generate()
             if (const auto * input_format = reader.getInputFormat())
                 chunk_size = reader.getInputFormat()->getApproxBytesReadForChunk();
             progress(num_rows, chunk_size ? chunk_size : chunk.bytes());
-            VirtualColumnUtils::addRequestedPathFileAndSizeVirtualsToChunk(chunk, requested_virtual_columns, reader.getPath(), reader.getFileSize());
+            VirtualColumnUtils::addRequestedPathFileAndSizeVirtualsToChunk(
+                chunk,
+                requested_virtual_columns,
+                reader.getPath(),
+                reader.getFileSize(),
+                reader.isArchive() ? (&reader.getFile()) : nullptr);
             return chunk;
         }
 
