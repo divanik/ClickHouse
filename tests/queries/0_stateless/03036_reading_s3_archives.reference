@@ -1,82 +1,38 @@
-1	Str1
-2	Str2
-3	Str3
-4	Str4
-5	Str5
-6	Str6
-3	Str3
-3	Str3
-4	Str4
-4	Str4
-1	Str1
-2	Str2
-3	Str3
-3	Str3
-4	Str4
-4	Str4
-5	Str5
-6	Str6
-1	Str1
-2	Str2
-7	Str7
-7	Str7
-8	Str8
-8	Str8
-5	Str5
-6	Str6
-7	Str7
-8	Str8
-9	Str9
-10	Str10
-3	Str3
-4	Str4
-11	Str11
-12	Str12
-3	Str3
-4	Str4
-5	Str5
-6	Str6
-1	Str1
-1	Str1
-2	Str2
-2	Str2
-3	Str3
-3	Str3
-3	Str3
-4	Str4
-4	Str4
-4	Str4
-5	Str5
-5	Str5
-6	Str6
-6	Str6
-7	Str7
-7	Str7
-8	Str8
-8	Str8
-9	Str9
-10	Str10
-11	Str11
-12	Str12
-1	Str1
-1	Str1
-2	Str2
-2	Str2
-3	Str3
-3	Str3
-3	Str3
-4	Str4
-4	Str4
-4	Str4
-5	Str5
-5	Str5
-6	Str6
-6	Str6
-7	Str7
-7	Str7
-8	Str8
-8	Str8
-9	Str9
-10	Str10
-11	Str11
-12	Str12
+1	Str1	03036_archive1.zip	test/03036_archive1.zip
+2	Str2	03036_archive1.zip	test/03036_archive1.zip
+3	Str3	03036_archive2.zip	test/03036_archive2.zip
+4	Str4	03036_archive2.zip	test/03036_archive2.zip
+5	Str5	03036_archive2.zip	test/03036_archive2.zip
+6	Str6	03036_archive2.zip	test/03036_archive2.zip
+3	Str3	03036_archive1.zip	test/03036_archive1.zip
+3	Str3	03036_archive2.zip	test/03036_archive2.zip
+4	Str4	03036_archive1.zip	test/03036_archive1.zip
+4	Str4	03036_archive2.zip	test/03036_archive2.zip
+1	Str1	03036_archive1.zip	test/03036_archive1.zip
+2	Str2	03036_archive1.zip	test/03036_archive1.zip
+3	Str3	03036_archive1.zip	test/03036_archive1.zip
+3	Str3	03036_archive2.zip	test/03036_archive2.zip
+4	Str4	03036_archive1.zip	test/03036_archive1.zip
+4	Str4	03036_archive2.zip	test/03036_archive2.zip
+5	Str5	03036_archive2.zip	test/03036_archive2.zip
+6	Str6	03036_archive2.zip	test/03036_archive2.zip
+1	Str1	03036_archive1.tar	test/03036_archive1.tar
+2	Str2	03036_archive1.tar	test/03036_archive1.tar
+7	Str7	03036_archive1.tar	test/03036_archive1.tar
+7	Str7	03036_archive2.tar	test/03036_archive2.tar
+8	Str8	03036_archive1.tar	test/03036_archive1.tar
+8	Str8	03036_archive2.tar	test/03036_archive2.tar
+5	Str5	03036_archive2.tar	test/03036_archive2.tar
+6	Str6	03036_archive2.tar	test/03036_archive2.tar
+7	Str7	03036_archive2.tar	test/03036_archive2.tar
+8	Str8	03036_archive2.tar	test/03036_archive2.tar
+9	Str9	03036_archive2.tar	test/03036_archive2.tar
+10	Str10	03036_archive2.tar	test/03036_archive2.tar
+3	Str3	03036_archive3.tar.gz	test/03036_archive3.tar.gz
+4	Str4	03036_archive3.tar.gz	test/03036_archive3.tar.gz
+11	Str11	03036_archive3.tar.gz	test/03036_archive3.tar.gz
+12	Str12	03036_archive3.tar.gz	test/03036_archive3.tar.gz
+3	Str3	03036_archive3.tar.gz	test/03036_archive3.tar.gz
+4	Str4	03036_archive3.tar.gz	test/03036_archive3.tar.gz
+5	Str5	03036_archive2.tar	test/03036_archive2.tar
+6	Str6	03036_archive2.tar	test/03036_archive2.tar
