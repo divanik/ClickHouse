@@ -52,6 +52,7 @@ URI::URI(const std::string & uri_)
 
     std::string temporal_uri = uri_;
     parseURIAndPathInsideArchive(std::move(temporal_uri), temporal_uri, archive_pattern);
+    bold_uri = temporal_uri;
     uri = Poco::URI(temporal_uri);
 
     std::unordered_map<std::string, std::string> mapper;

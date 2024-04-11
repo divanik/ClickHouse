@@ -29,6 +29,7 @@ struct URI
     std::string version_id;
     std::string storage_name;
     std::optional<std::string> archive_pattern;
+    std::string bold_uri;
 
     bool is_virtual_hosted_style;
 
