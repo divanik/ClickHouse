@@ -8,7 +8,6 @@
 #include <Backups/BackupEntryWrappedWith.h>
 #include <Backups/IBackup.h>
 #include <Backups/RestorerFromBackup.h>
-#include "Common/logger_useful.h"
 #include <Common/Config/ConfigHelper.h>
 #include <Common/CurrentMetrics.h>
 #include <Common/Increment.h>
@@ -1314,7 +1313,8 @@ MergeTreeData::LoadPartResult MergeTreeData::loadDataPart(
         /// during loading, such as "not enough memory" or network error.
         if (isRetryableException(std::current_exception()))
             throw;
-        LOG_DEBUG(log, "Failed to load data part {}, unknown exception", part_name);
+
+        LOG_DEBUG(log, "Failed to load data part {} with exception: {}", part_name, getExceptionMessage(std::current_exception(), false));
         mark_broken();
         return res;
     }
@@ -1345,6 +1345,7 @@ MergeTreeData::LoadPartResult MergeTreeData::loadDataPart(
         /// during loading, such as "not enough memory" or network error.
         if (isRetryableException(std::current_exception()))
             throw;
+
         mark_broken();
         return res;
     }
@@ -1463,25 +1464,9 @@ MergeTreeData::LoadPartResult MergeTreeData::loadDataPartWithRetries(
         if (try_no + 1 == max_tries)
             throw;
 
-        String exception_message;
-        try
-        {
-            rethrow_exception(exception_ptr);
-        }
-        catch (const Exception & e)
-        {
-            exception_message = e.message();
-        }
-        #if USE_AZURE_BLOB_STORAGE
-        catch (const Azure::Core::RequestFailedException & e)
-        {
-             exception_message = e.Message;
-        }
-        #endif
-
-
-        LOG_DEBUG(log, "Failed to load data part {} at try {} with retryable error: {}. Will retry in {} ms",
-                  part_name, try_no, exception_message, initial_backoff_ms);
+        LOG_DEBUG(log,
+            "Failed to load data part {} at try {} with retryable error: {}. Will retry in {} ms",
+             part_name, try_no, getExceptionMessage(exception_ptr, false), initial_backoff_ms);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(initial_backoff_ms));
         initial_backoff_ms = std::min(initial_backoff_ms * 2, max_backoff_ms);
@@ -1985,6 +1970,15 @@ void MergeTreeData::waitForOutdatedPartsToBeLoaded() const TSA_NO_THREAD_SAFETY_
     /// Background tasks are not run if storage is static.
     if (isStaticStorage())
         return;
+
+    /// If waiting is not required, do NOT log and do NOT enable/disable turbo mode to make `waitForOutdatedPartsToBeLoaded` a lightweight check
+    {
+        std::unique_lock lock(outdated_data_parts_mutex);
+        if (outdated_data_parts_loading_canceled)
+            throw Exception(ErrorCodes::NOT_INITIALIZED, "Loading of outdated data parts was already canceled");
+        if (outdated_data_parts_loading_finished)
+            return;
+    }
 
     /// We need to load parts as fast as possible
     getOutdatedPartsLoadingThreadPool().enableTurboMode();
@@ -2994,7 +2988,7 @@ void MergeTreeData::checkAlterIsPossible(const AlterCommands & commands, Context
 
     commands.apply(new_metadata, local_context);
 
-    if (commands.hasInvertedIndex(new_metadata) && !settings.allow_experimental_inverted_index)
+    if (AlterCommands::hasInvertedIndex(new_metadata) && !settings.allow_experimental_inverted_index)
         throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,
                 "Experimental Inverted Index feature is not enabled (turn on setting 'allow_experimental_inverted_index')");
 
