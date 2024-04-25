@@ -30,7 +30,7 @@ struct URI
     std::string version_id;
     std::string storage_name;
     std::optional<std::string> archive_pattern;
-    std::string bold_uri;
+    std::string uri_str;
 
     bool is_virtual_hosted_style;
 
@@ -41,7 +41,8 @@ struct URI
     static void validateBucket(const std::string & bucket, const Poco::URI & uri);
 
 private:
-    void parseURIAndPathInsideArchive(std::string source, std::string & final_uri, std::optional<std::string> & path_in_archive);
+    bool containsArchive(const std::string & source);
+    std::pair<std::string, std::string> getPathToArchiveAndArchivePattern(const std::string & source);
 };
 
 }

@@ -55,10 +55,11 @@ URI::URI(const std::string & uri_)
     static constexpr auto OSS = "OSS";
     static constexpr auto EOS = "EOS";
 
-    std::string temporal_uri = uri_;
-    parseURIAndPathInsideArchive(std::move(temporal_uri), temporal_uri, archive_pattern);
-    bold_uri = temporal_uri;
-    uri = Poco::URI(temporal_uri);
+    if (containsArchive(uri_))
+        std::tie(uri_str, archive_pattern) = getPathToArchiveAndArchivePattern(uri_);
+    else
+        uri_str = uri_;
+    uri = Poco::URI(uri_str);
 
     std::unordered_map<std::string, std::string> mapper;
     auto context = Context::getGlobalContextInstance();
@@ -86,7 +87,7 @@ URI::URI(const std::string & uri_)
     storage_name = S3;
 
     if (uri.getHost().empty())
-        throw Exception(::DB::ErrorCodes::BAD_ARGUMENTS, "Host is empty in S3 URI.");
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "Host is empty in S3 URI.");
 
     /// Extract object version ID from query string.
     bool has_version_id = false;
@@ -167,23 +168,23 @@ void URI::validateBucket(const String & bucket, const Poco::URI & uri)
             !uri.empty() ? " (" + uri.toString() + ")" : "");
 }
 
-void URI::parseURIAndPathInsideArchive(std::string source, std::string & final_uri, std::optional<std::string> & path_in_archive)
+bool URI::containsArchive(const std::string & source)
 {
     size_t pos = source.find("::");
-    if (pos == std::string::npos)
-    {
-        final_uri = std::move(source);
-        return;
-    }
+    return (pos != std::string::npos);
+}
 
-    std::string_view uri_view = std::string_view{source}.substr(0, pos);
-    while (uri_view.ends_with(' '))
-        uri_view.remove_suffix(1);
+std::pair<std::string, std::string> URI::getPathToArchiveAndArchivePattern(const std::string & source)
+{
+    size_t pos = source.find("::");
+    assert(pos != std::npos);
 
-    if (uri_view.empty())
+    std::string path_to_archive = source.substr(0, pos);
+    while ((!path_to_archive.empty()) && path_to_archive.ends_with(' '))
+        path_to_archive.pop_back();
+
+    if (path_to_archive.empty())
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Path to archive is empty");
-
-    final_uri = uri_view;
 
     std::string_view path_in_archive_view = std::string_view{source}.substr(pos + 2);
     while (path_in_archive_view.front() == ' ')
@@ -192,7 +193,7 @@ void URI::parseURIAndPathInsideArchive(std::string source, std::string & final_u
     if (path_in_archive_view.empty())
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Filename is empty");
 
-    path_in_archive = path_in_archive_view;
+    return {path_to_archive, std::string{path_in_archive_view}};
 }
 }
 

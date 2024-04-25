@@ -217,7 +217,7 @@ void TableFunctionS3::parseArgumentsImpl(ASTs & args, const ContextPtr & context
 
         if (configuration.format == "auto")
             configuration.format
-                = FormatFactory::instance().tryGetFormatFromFileName(Poco::URI(configuration.url.bold_uri).getPath()).value_or("auto");
+                = FormatFactory::instance().tryGetFormatFromFileName(Poco::URI(configuration.url.uri_str).getPath()).value_or("auto");
     }
 
     configuration.keys = {configuration.url.key};
