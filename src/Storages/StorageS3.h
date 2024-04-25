@@ -53,6 +53,8 @@ struct KeyWithInfo
     std::optional<S3::ObjectInfo> info;
     std::optional<String> path_in_archive;
     std::shared_ptr<IArchiveReader> archive_reader;
+
+    String getPath() { return path_in_archive.has_value() ? (key + "::" + path_in_archive.value()) : key; }
 };
 using KeyWithInfoPtr = std::shared_ptr<KeyWithInfo>;
 
@@ -326,7 +328,7 @@ public:
         IArchiveReader::NameFilter filter = {}; // used when files inside archive are defined with a glob
         const Configuration & configuration;
         std::mutex take_next_mutex;
-        bool initialized{true};
+        bool initialized{false};
     };
 
 
