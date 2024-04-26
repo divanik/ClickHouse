@@ -55,6 +55,7 @@ struct KeyWithInfo
     std::shared_ptr<IArchiveReader> archive_reader;
 
     String getPath() { return path_in_archive.has_value() ? (key + "::" + path_in_archive.value()) : key; }
+    String formatInferenceName() { return path_in_archive.has_value() ? path_in_archive.value() : key; }
 };
 using KeyWithInfoPtr = std::shared_ptr<KeyWithInfo>;
 
@@ -199,31 +200,6 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
     std::shared_ptr<const Context> context,
     const Configuration & configuration);
 
-// class S3ReadBufferCreator : WithContext
-// {
-// public:
-//     S3ReadBufferCreator(
-//         const std::shared_ptr<const S3::Client> & client_,
-//         const String & bucket_,
-//         const String & version_id_,
-//         const S3Settings::RequestSettings & request_settings_,
-//         const ContextPtr & context_);
-//     std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(
-//         const String & key, size_t object_size, std::shared_ptr<const Context> context, const Configuration & configuration) const;
-//     std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
-//         const String & key,
-//         const ReadSettings & read_settings,
-//         size_t object_size,
-//         std::shared_ptr<const Context> context,
-//         const Configuration & configuration) const;
-
-//     std::shared_ptr<const S3::Client> client;
-//     String bucket;
-//     String version_id;
-//     S3Settings::RequestSettings request_settings;
-//     LoggerPtr log = getLogger("S3ReadBufferCreator");
-// };
-
 class StorageS3Source : public SourceWithKeyCondition, WithContext
 {
 public:
@@ -310,7 +286,8 @@ public:
             std::unique_ptr<IIterator> basic_iterator_,
             const std::string & archive_pattern_,
             const Configuration & configuration_,
-            ContextPtr context_);
+            ContextPtr context_,
+            KeysWithInfo * read_keys_);
 
         KeyWithInfoPtr next(size_t) override; /// NOLINT
         size_t estimatedKeysCount() override;
@@ -328,6 +305,7 @@ public:
         IArchiveReader::NameFilter filter = {}; // used when files inside archive are defined with a glob
         const Configuration & configuration;
         std::mutex take_next_mutex;
+        KeysWithInfo * read_keys;
         bool initialized{false};
     };
 
@@ -362,8 +340,6 @@ public:
     }
 
     Chunk generate() override;
-
-    // std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(const String & key, size_t object_size) const;
 
 private:
     friend class StorageS3QueueSource;
@@ -435,6 +411,11 @@ private:
         const String & getFile() const
         {
             return key_with_info->path_in_archive.has_value() ? key_with_info->path_in_archive.value() : key_with_info->key;
+        }
+        String getFileExtended() const
+        {
+            return key_with_info->path_in_archive.has_value() ? (String{key_with_info->key} + "::" + key_with_info->path_in_archive.value())
+                                                              : key_with_info->key;
         }
         bool isArchive() { return key_with_info->path_in_archive.has_value(); }
         const KeyWithInfo & getKeyWithInfo() const { return *key_with_info; }

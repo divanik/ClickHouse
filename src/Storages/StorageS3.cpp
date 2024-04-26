@@ -1,16 +1,11 @@
 #include <cstddef>
 #include <iterator>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <string_view>
 #include <Poco/Logger.h>
-#include "Common/logger_useful.h"
-#include "IO/Archives/IArchiveReader.h"
-#include "IO/Archives/createArchiveReader.h"
 #include "IO/CompressionMethod.h"
 #include "IO/ReadBuffer.h"
-#include "IO/ReadBufferFromFileBase.h"
 #include "Interpreters/Context_fwd.h"
 #include "Storages/MergeTree/ReplicatedMergeTreePartHeader.h"
 
@@ -584,8 +579,13 @@ StorageS3Source::ArchiveIterator::ArchiveIterator(
     std::unique_ptr<IIterator> basic_iterator_,
     const std::string & archive_pattern_,
     const Configuration & configuration_,
-    ContextPtr context_)
-    : WithContext(context_), basic_iterator(std::move(basic_iterator_)), basic_key_with_info_ptr(nullptr), configuration(configuration_)
+    ContextPtr context_,
+    KeysWithInfo * read_keys_)
+    : WithContext(context_)
+    , basic_iterator(std::move(basic_iterator_))
+    , basic_key_with_info_ptr(nullptr)
+    , configuration(configuration_)
+    , read_keys(read_keys_)
 {
     if (archive_pattern_.find_first_of("*?{") != std::string::npos)
     {
@@ -629,13 +629,14 @@ KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
             std::shared_ptr<IArchiveReader> current_archive_reader = archive_reader;
             basic_key_with_info_ptr = basic_iterator->next();
             refreshArchive();
-            lock.unlock();
-            LOG_DEBUG(&Poco::Logger::get("Base file name"), "{}", current_basic_key_with_info_ptr->key);
-            if (current_archive_reader->fileExists(path_in_archive))
+            bool file_exists = current_archive_reader->fileExists(path_in_archive);
+            if (file_exists)
             {
-                LOG_DEBUG(&Poco::Logger::get("File exists in archive"), "{} {}", current_basic_key_with_info_ptr->key, path_in_archive);
-                return std::make_shared<KeyWithInfo>(
+                KeyWithInfoPtr archive_key_with_info = std::make_shared<KeyWithInfo>(
                     current_basic_key_with_info_ptr->key, std::nullopt, std::optional{path_in_archive}, current_archive_reader);
+                if (read_keys != nullptr)
+                    read_keys->push_back(archive_key_with_info);
+                return archive_key_with_info;
             }
         }
     }
@@ -655,12 +656,15 @@ KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
                 basic_key_with_info_ptr = basic_iterator->next();
                 refreshArchive();
             }
-            lock.unlock();
             bool satisfies = filter(current_filename);
+            lock.unlock();
             if (satisfies)
             {
-                return std::make_shared<KeyWithInfo>(
+                KeyWithInfoPtr archive_key_with_info = std::make_shared<KeyWithInfo>(
                     current_basic_key_with_info_ptr->key, std::nullopt, std::optional{current_filename}, current_archive_reader);
+                if (read_keys != nullptr)
+                    read_keys->push_back(archive_key_with_info);
+                return archive_key_with_info;
             }
         }
     }
@@ -686,7 +690,6 @@ void StorageS3Source::ArchiveIterator::refreshArchive()
         }
         auto basic_key_with_info_ptr_local = basic_key_with_info_ptr;
         size_t archive_size = basic_key_with_info_ptr->info.has_value() ? basic_key_with_info_ptr->info.value().size : 0;
-        LOG_DEBUG(&Poco::Logger::get("Before context crash"), "");
         auto context = getContext();
         archive_reader = createArchiveReader(
             basic_key_with_info_ptr->key,
@@ -860,17 +863,6 @@ std::future<StorageS3Source::ReaderHolder> StorageS3Source::createReaderAsync(si
     return create_reader_scheduler([=, this] { return createReader(idx); }, Priority{});
 }
 
-// S3ReadBufferCreator::S3ReadBufferCreator(
-//     const std::shared_ptr<const S3::Client> & client_,
-//     const String & bucket_,
-//     const String & version_id_,
-//     const S3Settings::RequestSettings & request_settings_,
-//     const ContextPtr & context_)
-//     : WithContext(context_), client(client_), bucket(bucket_), version_id(version_id_), request_settings(request_settings_)
-// {
-// }
-
-
 std::unique_ptr<ReadBufferFromFileBase>
 createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const Context> context, const Configuration & configuration)
 {
@@ -995,7 +987,7 @@ Chunk StorageS3Source::generate()
         }
 
         if (reader.getInputFormat() && getContext()->getSettingsRef().use_cache_for_count_from_files)
-            addNumRowsToCache(reader.getFile(), total_rows_in_file);
+            addNumRowsToCache(reader.getFileExtended(), total_rows_in_file);
 
         total_rows_in_file = 0;
 
@@ -1282,8 +1274,6 @@ StorageS3::StorageS3(
 {
     updateConfiguration(context_); // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
 
-    LOG_DEBUG(&Poco::Logger::get("Storage with S3"), "Format: {}", configuration.format);
-
     if (configuration.format != "auto")
         FormatFactory::instance().checkFormatName(configuration.format);
     context_->getGlobalContext()->getRemoteHostFilter().checkURL(configuration.url.uri);
@@ -1335,6 +1325,7 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
     {
         auto basic_iterator = [&]() -> std::unique_ptr<StorageS3Source::IIterator>
         {
+            KeysWithInfo * local_read_keys = configuration.url.archive_pattern.has_value() ? nullptr : read_keys;
             if (configuration.withGlobs())
             {
                 /// Iterate through disclosed globs and make a source for each file
@@ -1344,7 +1335,7 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
                     predicate,
                     virtual_columns,
                     local_context,
-                    read_keys,
+                    local_read_keys,
                     configuration.request_settings,
                     file_progress_callback);
             }
@@ -1366,17 +1357,14 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
                     keys,
                     configuration.url.bucket,
                     configuration.request_settings,
-                    read_keys,
+                    local_read_keys,
                     file_progress_callback);
             }
         }();
         if (configuration.url.archive_pattern.has_value())
         {
-            if (read_keys)
-                read_keys->clear(); // We do not want to use read_keys during schema inference
-            LOG_DEBUG(&Poco::Logger::get("Creating archive iterator"), "");
             return std::make_shared<StorageS3Source::ArchiveIterator>(
-                std::move(basic_iterator), configuration.url.archive_pattern.value(), configuration, local_context);
+                std::move(basic_iterator), configuration.url.archive_pattern.value(), configuration, local_context, read_keys);
         }
         else
         {
@@ -1436,12 +1424,6 @@ void ReadFromStorageS3Step::applyFilters(ActionDAGNodes added_filter_nodes)
     const ActionsDAG::Node * predicate = nullptr;
     if (filter_actions_dag)
         predicate = filter_actions_dag->getOutputs().at(0);
-    // auto read_buffer_creator = std::make_shared<S3ReadBufferCreator>(
-    //     query_configuration.client,
-    //     query_configuration.url.bucket,
-    //     query_configuration.url.version_id,
-    //     query_configuration.request_settings,
-    //     getContext());
     createIterator(predicate);
 }
 
@@ -1465,12 +1447,6 @@ void ReadFromStorageS3Step::initializePipeline(QueryPipelineBuilder & pipeline, 
     if (storage.partition_by && query_configuration.withWildcard())
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Reading from a partitioned S3 storage is not implemented yet");
 
-    // auto read_buffer_creator = std::make_shared<S3ReadBufferCreator>(
-    //     query_configuration.client,
-    //     query_configuration.url.bucket,
-    //     query_configuration.url.version_id,
-    //     query_configuration.request_settings,
-    //     getContext());
     createIterator(nullptr);
     size_t estimated_keys_count = iterator_wrapper->estimatedKeysCount();
     if (estimated_keys_count > 1)
@@ -1875,7 +1851,19 @@ Configuration StorageS3::getConfiguration(ASTs & engine_args, const ContextPtr &
     configuration.keys = {configuration.url.key};
 
     if (configuration.format == "auto" && get_format_from_file)
-        configuration.format = FormatFactory::instance().tryGetFormatFromFileName(configuration.url.key).value_or("auto");
+    {
+        if (configuration.url.archive_pattern.has_value())
+        {
+            configuration.format = FormatFactory::instance()
+                                       .tryGetFormatFromFileName(Poco::URI(configuration.url.archive_pattern.value()).getPath())
+                                       .value_or("auto");
+        }
+        else
+        {
+            configuration.format
+                = FormatFactory::instance().tryGetFormatFromFileName(Poco::URI(configuration.url.uri_str).getPath()).value_or("auto");
+        }
+    }
 
     return configuration;
 }
@@ -1912,7 +1900,6 @@ namespace
             , format_settings(format_settings_)
             , prev_read_keys_size(read_keys_.size())
         {
-            LOG_DEBUG(&Poco::Logger::get("Format"), "Is format: {}", format.has_value() ? format.value() : "NO FORMAT");
         }
 
         Data next() override
@@ -1925,7 +1912,8 @@ namespace
                 {
                     for (const auto & key_with_info : read_keys)
                     {
-                        if (auto format_from_file_name = FormatFactory::instance().tryGetFormatFromFileName(key_with_info->key))
+                        if (auto format_from_file_name
+                            = FormatFactory::instance().tryGetFormatFromFileName(key_with_info->formatInferenceName()))
                         {
                             format = format_from_file_name;
                             break;
@@ -1965,40 +1953,31 @@ namespace
                     return {nullptr, std::nullopt, format};
                 }
 
-                /// S3 file iterator could get new keys after new iteration
-                if (!current_key_with_info->path_in_archive.has_value())
+                if (read_keys.size() > prev_read_keys_size)
                 {
-                    if (read_keys.size() > prev_read_keys_size)
+                    /// If format is unknown we can try to determine it by new file names.
+                    if (!format)
                     {
-                        /// If format is unknown we can try to determine it by new file names.
-                        if (!format)
+                        for (auto it = read_keys.begin() + prev_read_keys_size; it != read_keys.end(); ++it)
                         {
-                            for (auto it = read_keys.begin() + prev_read_keys_size; it != read_keys.end(); ++it)
+                            if (auto format_from_file_name
+                                = FormatFactory::instance().tryGetFormatFromFileName((*it)->formatInferenceName()))
                             {
-                                if (auto format_from_file_name = FormatFactory::instance().tryGetFormatFromFileName((*it)->key))
-                                {
-                                    format = format_from_file_name;
-                                    break;
-                                }
+                                format = format_from_file_name;
+                                break;
                             }
                         }
-
-                        /// Check new files in schema cache if schema inference mode is default.
-                        if (getContext()->getSettingsRef().schema_inference_mode == SchemaInferenceMode::DEFAULT)
-                        {
-                            auto columns_from_cache = tryGetColumnsFromCache(read_keys.begin() + prev_read_keys_size, read_keys.end());
-                            if (columns_from_cache)
-                                return {nullptr, columns_from_cache, format};
-                        }
-
-                        prev_read_keys_size = read_keys.size();
                     }
-                }
-                else if (!format)
-                {
-                    if (auto format_from_file_name
-                        = FormatFactory::instance().tryGetFormatFromFileName(current_key_with_info->path_in_archive.value()))
-                        format = format_from_file_name;
+
+                    /// Check new files in schema cache if schema inference mode is default.
+                    if (getContext()->getSettingsRef().schema_inference_mode == SchemaInferenceMode::DEFAULT)
+                    {
+                        auto columns_from_cache = tryGetColumnsFromCache(read_keys.begin() + prev_read_keys_size, read_keys.end());
+                        if (columns_from_cache)
+                            return {nullptr, columns_from_cache, format};
+                    }
+
+                    prev_read_keys_size = read_keys.size();
                 }
 
                 if (getContext()->getSettingsRef().s3_skip_empty_files && current_key_with_info->info && current_key_with_info->info->size == 0)
@@ -2017,13 +1996,7 @@ namespace
 
                 int zstd_window_log_max = static_cast<int>(getContext()->getSettingsRef().zstd_window_log_max);
                 std::unique_ptr<ReadBufferFromFileBase> impl;
-                if (!current_key_with_info->info)
-                    current_key_with_info->info = S3::getObjectInfo(
-                        *configuration.client,
-                        configuration.url.bucket,
-                        current_key_with_info->key,
-                        configuration.url.version_id,
-                        configuration.request_settings);
+
                 if (!current_key_with_info->path_in_archive.has_value())
                 {
                     impl = std::make_unique<ReadBufferFromS3>(
@@ -2065,15 +2038,6 @@ namespace
             String source = fs::path(configuration.url.uri.getHost() + std::to_string(configuration.url.uri.getPort()))
                 / configuration.url.bucket / current_key_with_info->getPath();
             auto key = getKeyForSchemaCache(source, *format, format_settings, getContext());
-            LOG_DEBUG(&Poco::Logger::get("Source columns cache"), "{}", source);
-
-            LOG_DEBUG(
-                &Poco::Logger::get("Cache key"),
-                "{} {} {} {}",
-                key.source,
-                key.format,
-                key.additional_format_info,
-                key.schema_inference_mode);
             StorageS3::getSchemaCache(getContext()).addNumRows(key, num_rows);
         }
 
@@ -2086,15 +2050,6 @@ namespace
             String source = fs::path(configuration.url.uri.getHost() + std::to_string(configuration.url.uri.getPort()))
                 / configuration.url.bucket / current_key_with_info->getPath();
             auto cache_key = getKeyForSchemaCache(source, *format, format_settings, getContext());
-            LOG_DEBUG(&Poco::Logger::get("Source columns cache"), "{}", source);
-
-            LOG_DEBUG(
-                &Poco::Logger::get("Cache key"),
-                "{} {} {} {}",
-                cache_key.source,
-                cache_key.format,
-                cache_key.additional_format_info,
-                cache_key.schema_inference_mode);
             StorageS3::getSchemaCache(getContext()).addColumns(cache_key, columns);
         }
 
@@ -2113,16 +2068,6 @@ namespace
                 std::back_inserter(sources),
                 [&](const auto & elem) { return host_and_bucket / elem->getPath(); });
             auto cache_keys = getKeysForSchemaCache(sources, *format, format_settings, getContext());
-            for (const auto & cache_key : cache_keys)
-            {
-                LOG_DEBUG(
-                    &Poco::Logger::get("Cache key"),
-                    "{} {} {} {}",
-                    cache_key.source,
-                    cache_key.format,
-                    cache_key.additional_format_info,
-                    cache_key.schema_inference_mode);
-            }
             StorageS3::getSchemaCache(getContext()).addManyColumns(cache_keys, columns);
         }
 
@@ -2152,7 +2097,6 @@ namespace
         std::optional<ColumnsDescription>
         tryGetColumnsFromCache(const KeysWithInfo::const_iterator & begin, const KeysWithInfo::const_iterator & end)
         {
-            LOG_DEBUG(&Poco::Logger::get("Enter tryGetColumnsFromCache"), "");
             auto context = getContext();
             if (!context->getSettingsRef().schema_inference_use_cache_for_s3)
                 return std::nullopt;
@@ -2160,7 +2104,6 @@ namespace
             auto & schema_cache = StorageS3::getSchemaCache(context);
             for (auto it = begin; it < end; ++it)
             {
-                LOG_DEBUG(&Poco::Logger::get("Enter one key"), "{} {}", (*it)->key, (*it)->path_in_archive.value());
                 auto get_last_mod_time = [&]
                 {
                     time_t last_modification_time = 0;
@@ -2190,18 +2133,9 @@ namespace
 
                 String source = fs::path(configuration.url.uri.getHost() + std::to_string(configuration.url.uri.getPort())) / path;
 
-                LOG_DEBUG(&Poco::Logger::get("Source columns cache"), "{}", source);
-
                 if (format)
                 {
                     auto cache_key = getKeyForSchemaCache(source, *format, format_settings, context);
-                    LOG_DEBUG(
-                        &Poco::Logger::get("Cache key"),
-                        "{} {} {} {}",
-                        cache_key.source,
-                        cache_key.format,
-                        cache_key.additional_format_info,
-                        cache_key.schema_inference_mode);
                     if (auto columns = schema_cache.tryGetColumns(cache_key, get_last_mod_time))
                         return columns;
                 }
@@ -2213,13 +2147,6 @@ namespace
                     for (const auto & format_name : FormatFactory::instance().getAllInputFormats())
                     {
                         auto cache_key = getKeyForSchemaCache(source, format_name, format_settings, context);
-                        LOG_DEBUG(
-                            &Poco::Logger::get("Cache key"),
-                            "{} {} {} {}",
-                            cache_key.source,
-                            cache_key.format,
-                            cache_key.additional_format_info,
-                            cache_key.schema_inference_mode);
                         if (auto columns = schema_cache.tryGetColumns(cache_key, get_last_mod_time))
                         {
                             /// Now format is known. It should be the same for all files.

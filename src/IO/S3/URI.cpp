@@ -1,7 +1,6 @@
 #include <IO/S3/URI.h>
 #include <Interpreters/Context.h>
 #include <Storages/NamedCollectionsHelpers.h>
-#include <Poco/URI.h>
 #include "Common/Macros.h"
 #if USE_AWS_S3
 #include <Common/Exception.h>
