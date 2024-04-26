@@ -176,7 +176,7 @@ bool URI::containsArchive(const std::string & source)
 std::pair<std::string, std::string> URI::getPathToArchiveAndArchivePattern(const std::string & source)
 {
     size_t pos = source.find("::");
-    assert(pos != std::npos);
+    assert(pos != std::string::npos);
 
     std::string path_to_archive = source.substr(0, pos);
     while ((!path_to_archive.empty()) && path_to_archive.ends_with(' '))
