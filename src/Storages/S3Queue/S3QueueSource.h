@@ -18,14 +18,14 @@ class StorageS3QueueSource : public ISource, WithContext
 {
 public:
     using IIterator = StorageS3Source::IIterator;
-    using KeyWithInfoPtr = StorageS3Source::KeyWithInfoPtr;
+    using KeyWithInfoPtr = S3KeyWithInfoPtr;
     using GlobIterator = StorageS3Source::DisclosedGlobIterator;
     using ZooKeeperGetter = std::function<zkutil::ZooKeeperPtr()>;
     using RemoveFileFunc = std::function<void(std::string)>;
     using FileStatusPtr = S3QueueFilesMetadata::FileStatusPtr;
     using Metadata = S3QueueFilesMetadata;
 
-    struct S3QueueKeyWithInfo : public StorageS3Source::KeyWithInfo
+    struct S3QueueKeyWithInfo : public S3KeyWithInfo
     {
         S3QueueKeyWithInfo(
                 const std::string & key_,

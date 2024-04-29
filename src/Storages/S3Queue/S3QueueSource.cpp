@@ -33,7 +33,7 @@ namespace ErrorCodes
 
 StorageS3QueueSource::S3QueueKeyWithInfo::S3QueueKeyWithInfo(
     const std::string & key_, std::optional<S3::ObjectInfo> info_, Metadata::ProcessingNodeHolderPtr processing_holder_)
-    : KeyWithInfo(key_, info_), processing_holder(processing_holder_)
+    : S3KeyWithInfo(key_, info_), processing_holder(processing_holder_)
 {
 }
 
