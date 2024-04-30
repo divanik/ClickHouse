@@ -4,6 +4,7 @@
 #include <optional>
 #include <string_view>
 #include <Poco/Logger.h>
+#include "Common/logger_useful.h"
 #include "IO/CompressionMethod.h"
 #include "IO/ReadBuffer.h"
 #include "Interpreters/Context_fwd.h"
@@ -226,7 +227,7 @@ public:
         /// We don't have to list bucket, because there is no asterisks.
         if (key_prefix.size() == globbed_uri.key.size())
         {
-            buffer.emplace_back(std::make_shared<S3KeyWithInfo>(globbed_uri.key, std::nullopt, archive_pattern));
+            buffer.emplace_back(std::make_shared<S3KeyWithInfo>(globbed_uri.key, std::nullopt));
             buffer_iter = buffer.begin();
             is_finished = true;
             return;
@@ -423,8 +424,6 @@ private:
     S3::ListObjectsV2Request request;
     S3Settings::RequestSettings request_settings;
 
-    std::optional<String> archive_pattern;
-
     ThreadPool list_objects_pool;
     ThreadPoolCallbackRunnerUnsafe<ListObjectsOutcome> list_objects_scheduler;
     std::future<ListObjectsOutcome> outcome_future;
@@ -594,11 +593,7 @@ StorageS3Source::ArchiveIterator::ArchiveIterator(
         if (!matcher->ok())
             throw Exception(
                 ErrorCodes::CANNOT_COMPILE_REGEXP, "Cannot compile regex from glob ({}): {}", archive_pattern_, matcher->error());
-        filter = IArchiveReader::NameFilter{[matcher, matcher_mutex = std::make_shared<std::mutex>()](const std::string & p) mutable
-                                            {
-                                                std::lock_guard lock(*matcher_mutex);
-                                                return re2::RE2::FullMatch(p, *matcher);
-                                            }};
+        filter = IArchiveReader::NameFilter{[matcher](const std::string & p) mutable { return re2::RE2::FullMatch(p, *matcher); }};
     }
     else
     {
@@ -606,35 +601,23 @@ StorageS3Source::ArchiveIterator::ArchiveIterator(
     }
 }
 
-void StorageS3Source::ArchiveIterator::lazyInitializeSafe()
-{
-    if (!initialized)
-    {
-        basic_key_with_info_ptr = basic_iterator->next();
-        refreshArchive();
-        initialized = true;
-    }
-}
-
 S3KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
 {
     if (!path_in_archive.empty())
     {
+        std::unique_lock lock{take_next_mutex};
         while (true)
         {
-            std::unique_lock lock{take_next_mutex};
-            lazyInitializeSafe();
-            if (!archive_reader)
-                return {};
-            S3KeyWithInfoPtr current_basic_key_with_info_ptr = basic_key_with_info_ptr;
-            std::shared_ptr<IArchiveReader> current_archive_reader = archive_reader;
             basic_key_with_info_ptr = basic_iterator->next();
-            refreshArchive();
-            bool file_exists = current_archive_reader->fileExists(path_in_archive);
+            if (!basic_key_with_info_ptr)
+                return {};
+            refreshArchiveReader();
+            bool file_exists = archive_reader->fileExists(path_in_archive);
+            // LOG_DEBUG(&Poco::Logger::get("Inside iterator"), "{} {}", path_in_archive, file_exists);
             if (file_exists)
             {
                 S3KeyWithInfoPtr archive_key_with_info = std::make_shared<S3KeyWithInfo>(
-                    current_basic_key_with_info_ptr->key, std::nullopt, std::optional{path_in_archive}, current_archive_reader);
+                    basic_key_with_info_ptr->key, std::nullopt, std::optional{path_in_archive}, archive_reader);
                 if (read_keys != nullptr)
                     read_keys->push_back(archive_key_with_info);
                 return archive_key_with_info;
@@ -643,26 +626,34 @@ S3KeyWithInfoPtr StorageS3Source::ArchiveIterator::next(size_t)
     }
     else
     {
+        std::unique_lock lock{take_next_mutex};
         while (true)
         {
-            std::unique_lock lock{take_next_mutex};
-            lazyInitializeSafe();
-            if (!archive_reader)
-                return {};
-            S3KeyWithInfoPtr current_basic_key_with_info_ptr = basic_key_with_info_ptr;
-            String current_filename = file_enumerator->getFileName();
-            std::shared_ptr<IArchiveReader> current_archive_reader = archive_reader;
-            if (!file_enumerator->nextFile())
+            if (!file_enumerator)
             {
                 basic_key_with_info_ptr = basic_iterator->next();
-                refreshArchive();
+                if (!basic_key_with_info_ptr)
+                    return {};
+                refreshArchiveReader();
+                file_enumerator = archive_reader->firstFile();
+                if (!file_enumerator)
+                {
+                    file_enumerator.reset();
+                    continue;
+                }
             }
+            else if (!file_enumerator->nextFile())
+            {
+                file_enumerator.reset();
+                continue;
+            }
+
+            String current_filename = file_enumerator->getFileName();
             bool satisfies = filter(current_filename);
-            lock.unlock();
             if (satisfies)
             {
-                S3KeyWithInfoPtr archive_key_with_info = std::make_shared<S3KeyWithInfo>(
-                    current_basic_key_with_info_ptr->key, std::nullopt, std::optional{current_filename}, current_archive_reader);
+                S3KeyWithInfoPtr archive_key_with_info
+                    = std::make_shared<S3KeyWithInfo>(basic_key_with_info_ptr->key, std::nullopt, current_filename, archive_reader);
                 if (read_keys != nullptr)
                     read_keys->push_back(archive_key_with_info);
                 return archive_key_with_info;
@@ -676,7 +667,7 @@ size_t StorageS3Source::ArchiveIterator::estimatedKeysCount()
     return basic_iterator->estimatedKeysCount();
 }
 
-void StorageS3Source::ArchiveIterator::refreshArchive()
+void StorageS3Source::ArchiveIterator::refreshArchiveReader()
 {
     if (basic_key_with_info_ptr)
     {
@@ -689,25 +680,18 @@ void StorageS3Source::ArchiveIterator::refreshArchive()
                 configuration.url.version_id,
                 configuration.request_settings);
         }
-        auto basic_key_with_info_ptr_local = basic_key_with_info_ptr;
-        size_t archive_size = basic_key_with_info_ptr->info.has_value() ? basic_key_with_info_ptr->info.value().size : 0;
+        auto key = basic_key_with_info_ptr->key;
+        size_t archive_size = basic_key_with_info_ptr->info.value().size;
         auto context = getContext();
-        archive_reader = createArchiveReader(
+        archive_reader = ::DB::createArchiveReader(
             basic_key_with_info_ptr->key,
-            [this, basic_key_with_info_ptr_local, archive_size, context]()
+            [this, key, archive_size, context]()
             {
                 {
-                    return createS3ReadBuffer(basic_key_with_info_ptr_local->key, archive_size, context, configuration);
+                    return createS3ReadBuffer(key, archive_size, context, configuration);
                 }
             },
             archive_size);
-        file_enumerator = archive_reader->firstFile();
-    }
-    else
-    {
-        basic_read_buffer = nullptr;
-        archive_reader = nullptr;
-        file_enumerator = nullptr;
     }
 }
 
@@ -871,13 +855,14 @@ createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const
     read_settings.enable_filesystem_cache = false;
     auto download_buffer_size = context->getSettings().max_download_buffer_size;
     const bool object_too_small = object_size <= 2 * download_buffer_size;
+    static LoggerPtr log = getLogger("StorageS3Source");
 
     // Create a read buffer that will prefetch the first ~1 MB of the file.
     // When reading lots of tiny files, this prefetching almost doubles the throughput.
     // For bigger files, parallel reading is more useful.
     if (object_too_small && read_settings.remote_fs_method == RemoteFSReadMethod::threadpool)
     {
-        // LOG_TRACE(log, "Downloading object of size {} from S3 with initial prefetch", object_size);
+        LOG_TRACE(log, "Downloading object of size {} from S3 with initial prefetch", object_size);
         return createAsyncS3ReadBuffer(key, read_settings, object_size, context, configuration);
     }
 

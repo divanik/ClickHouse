@@ -284,11 +284,9 @@ public:
 
         S3KeyWithInfoPtr next(size_t) override; /// NOLINT
         size_t estimatedKeysCount() override;
-        void lazyInitializeSafe();
+        void refreshArchiveReader();
 
     private:
-        void refreshArchive();
-
         std::unique_ptr<IIterator> basic_iterator;
         S3KeyWithInfoPtr basic_key_with_info_ptr;
         std::unique_ptr<ReadBufferFromFileBase> basic_read_buffer;
@@ -299,9 +297,7 @@ public:
         const S3Configuration & configuration;
         std::mutex take_next_mutex;
         S3KeysWithInfo * read_keys;
-        bool initialized{false};
     };
-
 
     friend StorageS3Source::ArchiveIterator;
 
