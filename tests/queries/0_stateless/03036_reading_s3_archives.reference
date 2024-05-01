@@ -48,3 +48,5 @@
 4	Str4	example2.csv	test/03036_archive3.tar.gz::example2.csv
 5	Str5	example3.csv	test/03036_archive2.tar::example3.csv
 6	Str6	example3.csv	test/03036_archive2.tar::example3.csv
+13	Str13	example7.csv	test/03036_compressed_file_archive.zip::example7.csv
+14	Str14	example7.csv	test/03036_compressed_file_archive.zip::example7.csv

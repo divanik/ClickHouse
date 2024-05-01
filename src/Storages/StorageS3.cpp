@@ -1145,10 +1145,9 @@ createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const
             "Object in bucket {} with key {} already exists. "
             "If you want to overwrite it, enable setting s3_truncate_on_insert, if you "
             "want to create a new file on each insert, enable setting s3_create_new_file_on_insert",
-            configuration.url.bucket,
-            key);
+            configuration.url.bucket, key);
     }
-    }
+}
 
 
     class PartitionedStorageS3Sink : public PartitionedSink, WithContext
@@ -2000,7 +1999,7 @@ createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const
                         wrapReadBufferWithCompressionMethod(
                             std::move(impl),
                             current_key_with_info->path_in_archive.has_value()
-                                ? CompressionMethod::None
+                                ? chooseCompressionMethod(current_key_with_info->path_in_archive.value(), configuration.compression_method)
                                 : chooseCompressionMethod(current_key_with_info->key, configuration.compression_method),
                             zstd_window_log_max),
                         std::nullopt,
