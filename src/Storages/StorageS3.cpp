@@ -584,7 +584,7 @@ StorageS3Source::ArchiveIterator::ArchiveIterator(
     : WithContext(context_)
     , basic_iterator(std::move(basic_iterator_))
     , basic_key_with_info_ptr(nullptr)
-    , configuration(configuration_)
+    , configuration(std::make_shared<const S3Configuration>(configuration_))
     , read_keys(read_keys_)
 {
     if (archive_pattern_.find_first_of("*?{") != std::string::npos)
@@ -674,19 +674,19 @@ void StorageS3Source::ArchiveIterator::refreshArchiveReader()
         if (!basic_key_with_info_ptr->info)
         {
             basic_key_with_info_ptr->info = S3::getObjectInfo(
-                *configuration.client,
-                configuration.url.bucket,
+                *configuration->client,
+                configuration->url.bucket,
                 basic_key_with_info_ptr->key,
-                configuration.url.version_id,
-                configuration.request_settings);
+                configuration->url.version_id,
+                configuration->request_settings);
         }
-        auto key = basic_key_with_info_ptr->key;
-        size_t archive_size = basic_key_with_info_ptr->info.value().size;
-        auto context = getContext();
         archive_reader = ::DB::createArchiveReader(
             basic_key_with_info_ptr->key,
-            [this, key, archive_size, context]() { return createS3ReadBuffer(key, archive_size, context, configuration); },
-            archive_size);
+            [key = basic_key_with_info_ptr->key,
+             archive_size = basic_key_with_info_ptr->info.value().size,
+             context = getContext(),
+             copied_configuration = configuration]() { return createS3ReadBuffer(key, archive_size, context, *copied_configuration); },
+            basic_key_with_info_ptr->info.value().size);
     }
 }
 
