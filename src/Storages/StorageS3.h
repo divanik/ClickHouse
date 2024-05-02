@@ -357,15 +357,13 @@ private:
             std::unique_ptr<ReadBuffer> read_buf_,
             std::shared_ptr<ISource> source_,
             std::unique_ptr<QueryPipeline> pipeline_,
-            std::unique_ptr<PullingPipelineExecutor> reader_,
-            std::shared_ptr<IArchiveReader> archive_reader_)
+            std::unique_ptr<PullingPipelineExecutor> reader_)
             : key_with_info(key_with_info_)
             , bucket(std::move(bucket_))
             , read_buf(std::move(read_buf_))
             , source(std::move(source_))
             , pipeline(std::move(pipeline_))
             , reader(std::move(reader_))
-            , archive_reader(std::move(archive_reader_))
         {
         }
 
@@ -419,7 +417,6 @@ private:
         std::shared_ptr<ISource> source;
         std::unique_ptr<QueryPipeline> pipeline;
         std::unique_ptr<PullingPipelineExecutor> reader;
-        std::shared_ptr<IArchiveReader> archive_reader;
     };
 
     ReaderHolder reader;

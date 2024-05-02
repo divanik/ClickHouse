@@ -688,6 +688,10 @@ void StorageS3Source::ArchiveIterator::refreshArchiveReader()
              copied_configuration = configuration]() { return createS3ReadBuffer(key, archive_size, context, *copied_configuration); },
             basic_key_with_info_ptr->info.value().size);
     }
+    else
+    {
+        archive_reader = nullptr;
+    }
 }
 
 StorageS3Source::StorageS3Source(
@@ -761,7 +765,6 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
     QueryPipelineBuilder builder;
     std::shared_ptr<ISource> source;
     std::unique_ptr<ReadBuffer> read_buf;
-    std::shared_ptr<IArchiveReader> archive_reader = key_with_info->archive_reader;
 
     std::optional<size_t> num_rows_from_cache = need_only_count && getContext()->getSettingsRef().use_cache_for_count_from_files ? tryGetNumRowsFromCache(*key_with_info) : std::nullopt;
     if (num_rows_from_cache)
@@ -785,7 +788,7 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
         else
         {
             compression_method = chooseCompressionMethod(key_with_info->path_in_archive.value(), compression_hint);
-            read_buf = archive_reader->readFile(key_with_info->path_in_archive.value(), /*throw_on_not_found=*/true);
+            read_buf = key_with_info->archive_reader->readFile(key_with_info->path_in_archive.value(), /*throw_on_not_found=*/true);
         }
         auto input_format = FormatFactory::instance().getInput(
             format,
@@ -830,14 +833,7 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
 
     ProfileEvents::increment(ProfileEvents::EngineFileLikeReadFiles);
 
-    return ReaderHolder{
-        key_with_info,
-        bucket,
-        std::move(read_buf),
-        std::move(source),
-        std::move(pipeline),
-        std::move(current_reader),
-        std::move(archive_reader)};
+    return ReaderHolder{key_with_info, bucket, std::move(read_buf), std::move(source), std::move(pipeline), std::move(current_reader)};
 }
 
 std::future<StorageS3Source::ReaderHolder> StorageS3Source::createReaderAsync(size_t idx)
