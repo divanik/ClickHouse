@@ -881,15 +881,20 @@ createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const
         std::shared_ptr<const Context> context,
         const S3Configuration & configuration)
     {
-        auto read_buffer_creator = [read_settings, object_size, &configuration](
+        auto read_buffer_creator = [read_settings,
+                                    object_size,
+                                    client = configuration.client,
+                                    bucket = configuration.url.bucket,
+                                    version_id = configuration.url.version_id,
+                                    request_settings = configuration.request_settings](
                                        bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
         {
             return std::make_unique<ReadBufferFromS3>(
-                configuration.client,
-                configuration.url.bucket,
+                client,
+                bucket,
                 object.remote_path,
-                configuration.url.version_id,
-                configuration.request_settings,
+                version_id,
+                request_settings,
                 read_settings,
                 /* use_external_buffer */ true,
                 /* offset */ 0,
@@ -1402,7 +1407,7 @@ createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const
             return;
 
         iterator_wrapper = createFileIterator(
-            query_configuration,
+            storage.getConfiguration(),
             storage.distributed_processing,
             context,
             predicate,
