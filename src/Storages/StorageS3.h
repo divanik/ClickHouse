@@ -187,14 +187,23 @@ private:
     bool parallelizeOutputAfterReading(ContextPtr context) const override;
 };
 
-std::unique_ptr<ReadBufferFromFileBase>
-createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const Context> context, const S3Configuration & configuration);
+std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(
+    const String & key,
+    size_t object_size,
+    std::shared_ptr<const Context> context,
+    std::shared_ptr<const S3::Client> client_ptr,
+    String bucket,
+    String version_id,
+    S3Settings::RequestSettings request_settings);
 std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
     const String & key,
     const ReadSettings & read_settings,
     size_t object_size,
     std::shared_ptr<const Context> context,
-    const S3Configuration & configuration);
+    std::shared_ptr<const S3::Client> client_ptr,
+    String bucket,
+    String version_id,
+    S3Settings::RequestSettings request_settings);
 
 class StorageS3Source : public SourceWithKeyCondition, WithContext
 {

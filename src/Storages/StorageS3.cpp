@@ -685,7 +685,11 @@ void StorageS3Source::ArchiveIterator::refreshArchiveReader()
             [key = basic_key_with_info_ptr->key,
              archive_size = basic_key_with_info_ptr->info.value().size,
              context = getContext(),
-             copied_configuration = configuration]() { return createS3ReadBuffer(key, archive_size, context, *copied_configuration); },
+             client_ = configuration->client,
+             bucket_ = configuration->url.bucket,
+             version_id_ = configuration->url.version_id,
+             request_settings_ = configuration->request_settings]()
+            { return createS3ReadBuffer(key, archive_size, context, client_, bucket_, version_id_, request_settings_); },
             basic_key_with_info_ptr->info.value().size);
     }
     else
@@ -783,7 +787,14 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
         if (!key_with_info->path_in_archive.has_value())
         {
             compression_method = chooseCompressionMethod(key_with_info->key, compression_hint);
-            read_buf = createS3ReadBuffer(key_with_info->key, key_with_info->info->size, getContext(), configuration);
+            read_buf = createS3ReadBuffer(
+                key_with_info->key,
+                key_with_info->info->size,
+                getContext(),
+                configuration.client,
+                configuration.url.bucket,
+                configuration.url.version_id,
+                configuration.request_settings);
         }
         else
         {
@@ -841,8 +852,14 @@ std::future<StorageS3Source::ReaderHolder> StorageS3Source::createReaderAsync(si
     return create_reader_scheduler([=, this] { return createReader(idx); }, Priority{});
 }
 
-std::unique_ptr<ReadBufferFromFileBase>
-createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const Context> context, const S3Configuration& configuration)
+std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(
+    const String & key,
+    size_t object_size,
+    std::shared_ptr<const Context> context,
+    std::shared_ptr<const S3::Client> client_ptr,
+    String bucket,
+    String version_id,
+    S3Settings::RequestSettings request_settings)
 {
     auto read_settings = context->getReadSettings().adjustBufferSize(object_size);
     read_settings.enable_filesystem_cache = false;
@@ -856,16 +873,24 @@ createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const
     if (object_too_small && read_settings.remote_fs_method == RemoteFSReadMethod::threadpool)
     {
         LOG_TRACE(log, "Downloading object of size {} from S3 with initial prefetch", object_size);
-        return createAsyncS3ReadBuffer(key, read_settings, object_size, context, configuration);
+        return createAsyncS3ReadBuffer(
+            key,
+            read_settings,
+            object_size,
+            context,
+            std::move(client_ptr),
+            std::move(bucket),
+            std::move(version_id),
+            std::move(request_settings));
     }
 
 
     return std::make_unique<ReadBufferFromS3>(
-        configuration.client,
-        configuration.url.bucket,
+        std::move(client_ptr),
+        std::move(bucket),
         key,
-        configuration.url.version_id,
-        configuration.request_settings,
+        std::move(version_id),
+        std::move(request_settings),
         read_settings,
         /*use_external_buffer*/ false,
         /*offset_*/ 0,
@@ -874,60 +899,63 @@ createS3ReadBuffer(const String & key, size_t object_size, std::shared_ptr<const
         object_size);
 }
 
-    std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
-        const String & key,
-        const ReadSettings & read_settings,
-        size_t object_size,
-        std::shared_ptr<const Context> context,
-        const S3Configuration & configuration)
+std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
+    const String & key,
+    const ReadSettings & read_settings,
+    size_t object_size,
+    std::shared_ptr<const Context> context,
+    std::shared_ptr<const S3::Client> client_ptr,
+    String bucket,
+    String version_id,
+    S3Settings::RequestSettings request_settings)
+{
+    auto read_buffer_creator = [read_settings,
+                                object_size,
+                                client = std::move(client_ptr),
+                                bucket_moved = std::move(bucket),
+                                version_id_moved = std::move(version_id),
+                                request_settings_moved = std::move(request_settings)](
+                                   bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
     {
-        auto read_buffer_creator = [read_settings,
-                                    object_size,
-                                    client = configuration.client,
-                                    bucket = configuration.url.bucket,
-                                    version_id = configuration.url.version_id,
-                                    request_settings = configuration.request_settings](
-                                       bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
-        {
-            return std::make_unique<ReadBufferFromS3>(
-                client,
-                bucket,
-                object.remote_path,
-                version_id,
-                request_settings,
-                read_settings,
-                /* use_external_buffer */ true,
-                /* offset */ 0,
-                /* read_until_position */ 0,
-                restricted_seek,
-                object_size);
-        };
-
-        auto modified_settings{read_settings};
-        /// User's S3 object may change, don't cache it.
-        modified_settings.use_page_cache_for_disks_without_file_cache = false;
-
-        /// FIXME: Changing this setting to default value breaks something around parquet reading
-        modified_settings.remote_read_min_bytes_for_seek = modified_settings.remote_fs_buffer_size;
-
-        auto s3_impl = std::make_unique<ReadBufferFromRemoteFSGather>(
-            std::move(read_buffer_creator),
-            StoredObjects{StoredObject{key, /* local_path */ "", object_size}},
-            "",
+        return std::make_unique<ReadBufferFromS3>(
+            client,
+            bucket_moved,
+            object.remote_path,
+            version_id_moved,
+            request_settings_moved,
             read_settings,
-            /* cache_log */ nullptr,
-            /* use_external_buffer */ true);
+            /* use_external_buffer */ true,
+            /* offset */ 0,
+            /* read_until_position */ 0,
+            restricted_seek,
+            object_size);
+    };
 
-        auto & pool_reader = context->getThreadPoolReader(FilesystemReaderType::ASYNCHRONOUS_REMOTE_FS_READER);
-        auto async_reader = std::make_unique<AsynchronousBoundedReadBuffer>(
-            std::move(s3_impl), pool_reader, modified_settings, context->getAsyncReadCounters(), context->getFilesystemReadPrefetchesLog());
+    auto modified_settings{read_settings};
+    /// User's S3 object may change, don't cache it.
+    modified_settings.use_page_cache_for_disks_without_file_cache = false;
 
-        async_reader->setReadUntilEnd();
-        if (read_settings.remote_fs_prefetch)
-            async_reader->prefetch(DEFAULT_PREFETCH_PRIORITY);
+    /// FIXME: Changing this setting to default value breaks something around parquet reading
+    modified_settings.remote_read_min_bytes_for_seek = modified_settings.remote_fs_buffer_size;
 
-        return async_reader;
-    }
+    auto s3_impl = std::make_unique<ReadBufferFromRemoteFSGather>(
+        std::move(read_buffer_creator),
+        StoredObjects{StoredObject{key, /* local_path */ "", object_size}},
+        "",
+        read_settings,
+        /* cache_log */ nullptr,
+        /* use_external_buffer */ true);
+
+    auto & pool_reader = context->getThreadPoolReader(FilesystemReaderType::ASYNCHRONOUS_REMOTE_FS_READER);
+    auto async_reader = std::make_unique<AsynchronousBoundedReadBuffer>(
+        std::move(s3_impl), pool_reader, modified_settings, context->getAsyncReadCounters(), context->getFilesystemReadPrefetchesLog());
+
+    async_reader->setReadUntilEnd();
+    if (read_settings.remote_fs_prefetch)
+        async_reader->prefetch(DEFAULT_PREFETCH_PRIORITY);
+
+    return async_reader;
+}
 
     StorageS3Source::~StorageS3Source()
     {
