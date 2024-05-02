@@ -192,18 +192,19 @@ std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(
     size_t object_size,
     std::shared_ptr<const Context> context,
     std::shared_ptr<const S3::Client> client_ptr,
-    String bucket,
-    String version_id,
-    S3Settings::RequestSettings request_settings);
+    const String & bucket,
+    const String & version_id,
+    const S3Settings::RequestSettings & request_settings);
+
 std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
     const String & key,
     const ReadSettings & read_settings,
     size_t object_size,
     std::shared_ptr<const Context> context,
     std::shared_ptr<const S3::Client> client_ptr,
-    String bucket,
-    String version_id,
-    S3Settings::RequestSettings request_settings);
+    const String & bucket,
+    const String & version_id,
+    const S3Settings::RequestSettings & request_settings);
 
 class StorageS3Source : public SourceWithKeyCondition, WithContext
 {
@@ -287,7 +288,10 @@ public:
         explicit ArchiveIterator(
             std::unique_ptr<IIterator> basic_iterator_,
             const std::string & archive_pattern_,
-            const S3Configuration & configuration_,
+            std::shared_ptr<const S3::Client> client_,
+            const String & bucket_,
+            const String & version_id_,
+            const S3Settings::RequestSettings & request_settings,
             ContextPtr context_,
             S3KeysWithInfo * read_keys_);
 
@@ -303,7 +307,10 @@ public:
         std::unique_ptr<IArchiveReader::FileEnumerator> file_enumerator = nullptr;
         std::string path_in_archive = {}; // used when reading a single file from archive
         IArchiveReader::NameFilter filter = {}; // used when files inside archive are defined with a glob
-        std::shared_ptr<const S3Configuration> configuration;
+        std::shared_ptr<const S3::Client> client;
+        const String bucket;
+        const String version_id;
+        S3Settings::RequestSettings request_settings;
         std::mutex take_next_mutex;
         S3KeysWithInfo * read_keys;
     };
@@ -319,7 +326,6 @@ public:
         UInt64 max_block_size_,
         const S3Settings::RequestSettings & request_settings_,
         String compression_hint_,
-        const S3Configuration & configuration_,
         const std::shared_ptr<const S3::Client> & client_,
         const String & bucket,
         const String & version_id,
@@ -352,7 +358,6 @@ private:
     UInt64 max_block_size;
     S3Settings::RequestSettings request_settings;
     String compression_hint;
-    const S3Configuration & configuration;
     std::shared_ptr<const S3::Client> client;
     Block sample_block;
     std::optional<FormatSettings> format_settings;

@@ -578,13 +578,19 @@ size_t StorageS3Source::ReadTaskIterator::estimatedKeysCount()
 StorageS3Source::ArchiveIterator::ArchiveIterator(
     std::unique_ptr<IIterator> basic_iterator_,
     const std::string & archive_pattern_,
-    const S3Configuration & configuration_,
+    std::shared_ptr<const S3::Client> client_,
+    const String & bucket_,
+    const String & version_id_,
+    const S3Settings::RequestSettings & request_settings_,
     ContextPtr context_,
     S3KeysWithInfo * read_keys_)
     : WithContext(context_)
     , basic_iterator(std::move(basic_iterator_))
     , basic_key_with_info_ptr(nullptr)
-    , configuration(std::make_shared<const S3Configuration>(configuration_))
+    , client(client_)
+    , bucket(bucket_)
+    , version_id(version_id_)
+    , request_settings(request_settings_)
     , read_keys(read_keys_)
 {
     if (archive_pattern_.find_first_of("*?{") != std::string::npos)
@@ -673,23 +679,12 @@ void StorageS3Source::ArchiveIterator::refreshArchiveReader()
     {
         if (!basic_key_with_info_ptr->info)
         {
-            basic_key_with_info_ptr->info = S3::getObjectInfo(
-                *configuration->client,
-                configuration->url.bucket,
-                basic_key_with_info_ptr->key,
-                configuration->url.version_id,
-                configuration->request_settings);
+            basic_key_with_info_ptr->info = S3::getObjectInfo(*client, bucket, basic_key_with_info_ptr->key, version_id, request_settings);
         }
         archive_reader = ::DB::createArchiveReader(
             basic_key_with_info_ptr->key,
-            [key = basic_key_with_info_ptr->key,
-             archive_size = basic_key_with_info_ptr->info.value().size,
-             context = getContext(),
-             client_ = configuration->client,
-             bucket_ = configuration->url.bucket,
-             version_id_ = configuration->url.version_id,
-             request_settings_ = configuration->request_settings]()
-            { return createS3ReadBuffer(key, archive_size, context, client_, bucket_, version_id_, request_settings_); },
+            [key = basic_key_with_info_ptr->key, archive_size = basic_key_with_info_ptr->info.value().size, context = getContext(), this]()
+            { return createS3ReadBuffer(key, archive_size, context, client, bucket, version_id, request_settings); },
             basic_key_with_info_ptr->info.value().size);
     }
     else
@@ -707,7 +702,6 @@ StorageS3Source::StorageS3Source(
     UInt64 max_block_size_,
     const S3Settings::RequestSettings & request_settings_,
     String compression_hint_,
-    const S3Configuration & configuration_,
     const std::shared_ptr<const S3::Client> & client_,
     const String & bucket_,
     const String & version_id_,
@@ -727,7 +721,6 @@ StorageS3Source::StorageS3Source(
     , max_block_size(max_block_size_)
     , request_settings(request_settings_)
     , compression_hint(std::move(compression_hint_))
-    , configuration(configuration_)
     , client(client_)
     , sample_block(info.format_header)
     , format_settings(format_settings_)
@@ -788,13 +781,7 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
         {
             compression_method = chooseCompressionMethod(key_with_info->key, compression_hint);
             read_buf = createS3ReadBuffer(
-                key_with_info->key,
-                key_with_info->info->size,
-                getContext(),
-                configuration.client,
-                configuration.url.bucket,
-                configuration.url.version_id,
-                configuration.request_settings);
+                key_with_info->key, key_with_info->info->size, getContext(), client, bucket, version_id, request_settings);
         }
         else
         {
@@ -857,9 +844,9 @@ std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(
     size_t object_size,
     std::shared_ptr<const Context> context,
     std::shared_ptr<const S3::Client> client_ptr,
-    String bucket,
-    String version_id,
-    S3Settings::RequestSettings request_settings)
+    const String & bucket,
+    const String & version_id,
+    const S3Settings::RequestSettings & request_settings)
 {
     auto read_settings = context->getReadSettings().adjustBufferSize(object_size);
     read_settings.enable_filesystem_cache = false;
@@ -873,24 +860,16 @@ std::unique_ptr<ReadBufferFromFileBase> createS3ReadBuffer(
     if (object_too_small && read_settings.remote_fs_method == RemoteFSReadMethod::threadpool)
     {
         LOG_TRACE(log, "Downloading object of size {} from S3 with initial prefetch", object_size);
-        return createAsyncS3ReadBuffer(
-            key,
-            read_settings,
-            object_size,
-            context,
-            std::move(client_ptr),
-            std::move(bucket),
-            std::move(version_id),
-            std::move(request_settings));
+        return createAsyncS3ReadBuffer(key, read_settings, object_size, context, client_ptr, bucket, version_id, request_settings);
     }
 
 
     return std::make_unique<ReadBufferFromS3>(
-        std::move(client_ptr),
-        std::move(bucket),
+        client_ptr,
+        bucket,
         key,
-        std::move(version_id),
-        std::move(request_settings),
+        version_id,
+        request_settings,
         read_settings,
         /*use_external_buffer*/ false,
         /*offset_*/ 0,
@@ -905,24 +884,23 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
     size_t object_size,
     std::shared_ptr<const Context> context,
     std::shared_ptr<const S3::Client> client_ptr,
-    String bucket,
-    String version_id,
-    S3Settings::RequestSettings request_settings)
+    const String & bucket,
+    const String & version_id,
+    const S3Settings::RequestSettings & request_settings)
 {
-    auto read_buffer_creator = [read_settings,
-                                object_size,
-                                client = std::move(client_ptr),
-                                bucket_moved = std::move(bucket),
-                                version_id_moved = std::move(version_id),
-                                request_settings_moved = std::move(request_settings)](
-                                   bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
+    //     client = std::move(client_ptr),
+    // bucket_moved = std::move(bucket),
+    // version_id_moved = std::move(version_id),
+    // request_settings_moved = std::move(request_settings)
+    auto read_buffer_creator
+        = [&, read_settings, object_size](bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
     {
         return std::make_unique<ReadBufferFromS3>(
-            client,
-            bucket_moved,
+            client_ptr,
+            bucket,
             object.remote_path,
-            version_id_moved,
-            request_settings_moved,
+            version_id,
+            request_settings,
             read_settings,
             /* use_external_buffer */ true,
             /* offset */ 0,
@@ -1366,7 +1344,14 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
             if (configuration.url.archive_pattern.has_value())
             {
                 return std::make_shared<StorageS3Source::ArchiveIterator>(
-                    std::move(basic_iterator), configuration.url.archive_pattern.value(), configuration, local_context, read_keys);
+                    std::move(basic_iterator),
+                    configuration.url.archive_pattern.value(),
+                    configuration.client,
+                    configuration.url.bucket,
+                    configuration.url.version_id,
+                    configuration.request_settings,
+                    local_context,
+                    read_keys);
             }
             else
             {
@@ -1474,7 +1459,6 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
                 max_block_size,
                 query_configuration.request_settings,
                 query_configuration.compression_method,
-                query_configuration,
                 query_configuration.client,
                 query_configuration.url.bucket,
                 query_configuration.url.version_id,
@@ -2150,7 +2134,7 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
                 {
                     /// If format is unknown, we can iterate through all possible input formats
                     /// and check if we have an entry with this format and this file in schema cache.
-                    /// If we have such entry for some format, we can use this format to read the file.
+                    /// If we have such entry fcreateor some format, we can use this format to read the file.
                     for (const auto & format_name : FormatFactory::instance().getAllInputFormats())
                     {
                         auto cache_key = getKeyForSchemaCache(source, format_name, format_settings, context);

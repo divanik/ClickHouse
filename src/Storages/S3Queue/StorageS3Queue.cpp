@@ -381,7 +381,6 @@ std::shared_ptr<StorageS3QueueSource> StorageS3Queue::createSource(
         max_block_size,
         configuration_snapshot.request_settings,
         configuration_snapshot.compression_method,
-        configuration,
         configuration_snapshot.client,
         configuration_snapshot.url.bucket,
         configuration_snapshot.url.version_id,
