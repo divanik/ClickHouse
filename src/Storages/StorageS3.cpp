@@ -2114,7 +2114,6 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
                              configuration.url.version_id,
                              configuration.request_settings,
                              /*with_metadata=*/ false,
-                             /*for_disk_s3=*/ false,
                              /*throw_on_error= */ false).last_modification_time;
                     }
 
