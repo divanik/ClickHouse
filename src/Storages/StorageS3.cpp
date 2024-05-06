@@ -892,15 +892,20 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
     // bucket_moved = std::move(bucket),
     // version_id_moved = std::move(version_id),
     // request_settings_moved = std::move(request_settings)
-    auto read_buffer_creator
-        = [&, read_settings, object_size](bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
+    auto read_buffer_creator = [read_settings,
+                                object_size,
+                                client_ptr_copied = client_ptr,
+                                bucket_copied = bucket,
+                                version_id_copied = version_id,
+                                request_settings_copied = request_settings](
+                                   bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
     {
         return std::make_unique<ReadBufferFromS3>(
-            client_ptr,
-            bucket,
+            client_ptr_copied,
+            bucket_copied,
             object.remote_path,
-            version_id,
-            request_settings,
+            version_id_copied,
+            request_settings_copied,
             read_settings,
             /* use_external_buffer */ true,
             /* offset */ 0,
