@@ -227,7 +227,7 @@ public:
         /// We don't have to list bucket, because there is no asterisks.
         if (key_prefix.size() == globbed_uri.key.size())
         {
-            buffer.emplace_back(std::make_shared<S3KeyWithInfo>(globbed_uri.key, std::nullopt));
+            buffer.emplace_back(std::make_shared<S3KeyWithInfo>(globbed_uri.key));
             buffer_iter = buffer.begin();
             is_finished = true;
             return;
@@ -549,7 +549,7 @@ StorageS3Source::ReadTaskIterator::ReadTaskIterator(
     pool.wait();
     buffer.reserve(max_threads_count);
     for (auto & key_future : keys)
-        buffer.emplace_back(std::make_shared<S3KeyWithInfo>(key_future.get(), std::nullopt));
+        buffer.emplace_back(std::make_shared<S3KeyWithInfo>(key_future.get()));
 }
 
 S3KeyWithInfoPtr StorageS3Source::ReadTaskIterator::next(size_t) /// NOLINT
@@ -681,7 +681,7 @@ void StorageS3Source::ArchiveIterator::refreshArchiveReader()
         {
             basic_key_with_info_ptr->info = S3::getObjectInfo(*client, bucket, basic_key_with_info_ptr->key, version_id, request_settings);
         }
-        archive_reader = ::DB::createArchiveReader(
+        archive_reader = createArchiveReader(
             basic_key_with_info_ptr->key,
             [key = basic_key_with_info_ptr->key, archive_size = basic_key_with_info_ptr->info.value().size, context = getContext(), this]()
             { return createS3ReadBuffer(key, archive_size, context, client, bucket, version_id, request_settings); },
@@ -893,7 +893,7 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
     // version_id_moved = std::move(version_id),
     // request_settings_moved = std::move(request_settings)
     auto read_buffer_creator
-        = [&, read_settings, object_size](bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
+        = [=](bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
     {
         return std::make_unique<ReadBufferFromS3>(
             client_ptr,
