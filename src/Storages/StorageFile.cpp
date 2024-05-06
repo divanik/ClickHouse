@@ -768,19 +768,8 @@ namespace
             /// so next time we won't iterate through files (that can be expensive).
             for (const auto & archive : archive_info.paths_to_archives)
                 paths_for_schema_cache.emplace_back(fmt::format("{}::{}", archive, archive_info.path_in_archive));
-
             auto & schema_cache = StorageFile::getSchemaCache(getContext());
             auto cache_keys = getKeysForSchemaCache(paths_for_schema_cache, *format, format_settings, getContext());
-            for (const auto & cache_key : cache_keys)
-            {
-                LOG_DEBUG(
-                    &Poco::Logger::get("Cache key"),
-                    "{} {} {} {}",
-                    cache_key.source,
-                    cache_key.format,
-                    cache_key.additional_format_info,
-                    cache_key.schema_inference_mode);
-            }
             schema_cache.addManyColumns(cache_keys, columns);
         }
 
