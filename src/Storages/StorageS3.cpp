@@ -160,6 +160,7 @@ public:
         const ContextPtr & context_,
         Block sample_block,
         StorageS3 & storage_,
+        StorageS3::Configuration & query_configuration_,
         ReadFromFormatInfo read_from_format_info_,
         bool need_only_count_,
         size_t max_block_size_,
@@ -169,6 +170,7 @@ public:
         , storage(storage_)
         , read_from_format_info(std::move(read_from_format_info_))
         , need_only_count(need_only_count_)
+        , query_configuration(query_configuration_)
         , max_block_size(max_block_size_)
         , num_streams(num_streams_)
     {
@@ -891,20 +893,14 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
     // bucket_moved = std::move(bucket),
     // version_id_moved = std::move(version_id),
     // request_settings_moved = std::move(request_settings)
-    auto read_buffer_creator = [read_settings,
-                                object_size,
-                                client_ptr_copied = client_ptr,
-                                bucket_copied = bucket,
-                                version_id_copied = version_id,
-                                request_settings_copied = request_settings](
-                                   bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
+    auto read_buffer_creator = [=](bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
     {
         return std::make_unique<ReadBufferFromS3>(
-            client_ptr_copied,
-            bucket_copied,
+            client_ptr,
+            bucket,
             object.remote_path,
-            version_id_copied,
-            request_settings_copied,
+            version_id,
+            request_settings,
             read_settings,
             /* use_external_buffer */ true,
             /* offset */ 0,
@@ -1401,6 +1397,7 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
             local_context,
             read_from_format_info.source_header,
             *this,
+            this->configuration,
             std::move(read_from_format_info),
             need_only_count,
             max_block_size,

@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <IO/ReadBufferFromS3.h>
+#include "Common/logger_useful.h"
 #include "IO/Archives/IArchiveReader.h"
 #include "IO/Archives/createArchiveReader.h"
 #include "IO/ReadBuffer.h"
@@ -29,6 +30,11 @@
 namespace DB
 {
 
+namespace ErrorCodes
+{
+extern const int LOGICAL_ERROR;
+}
+
 class PullingPipelineExecutor;
 class NamedCollection;
 
@@ -44,9 +50,13 @@ public:
             std::optional<S3::ObjectInfo> info_ = std::nullopt,
             std::optional<String> path_in_archive_ = std::nullopt,
             std::shared_ptr<IArchiveReader> archive_reader_ = nullptr)
-            : key(std::move(key_)), info(std::move(info_)), path_in_archive(path_in_archive_), archive_reader(std::move(archive_reader_))
+            : key(std::move(key_))
+            , info(std::move(info_))
+            , path_in_archive(std::move(path_in_archive_))
+            , archive_reader(std::move(archive_reader_))
         {
-            assert(path_in_archive_.has_value() == (archive_reader_ != nullptr));
+            if (path_in_archive.has_value() != (archive_reader != nullptr))
+                throw Exception(ErrorCodes::LOGICAL_ERROR, "Archive reader and path in archive must exist simultaneously");
         }
 
         virtual ~KeyWithInfo() = default;
