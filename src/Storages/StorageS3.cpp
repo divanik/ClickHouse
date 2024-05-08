@@ -1398,7 +1398,6 @@ void StorageS3::read(
         local_context,
         read_from_format_info.source_header,
         *this,
-        this->configuration,
         std::move(read_from_format_info),
         need_only_count,
         max_block_size,
