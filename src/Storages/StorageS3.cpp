@@ -173,7 +173,6 @@ public:
         , max_block_size(max_block_size_)
         , num_streams(num_streams_)
     {
-        //storage_.updateConfigurationAndGetCopy(context);
         query_configuration.update(context);
         virtual_columns = storage.getVirtualsList();
     }
@@ -1346,7 +1345,7 @@ StorageS3::StorageS3(
 }
 
 static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
-    const StorageS3::Configuration & configuration,
+    StorageS3::Configuration configuration,
     bool distributed_processing,
     ContextPtr local_context,
     const ActionsDAG::Node * predicate,
@@ -1420,16 +1419,18 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
 
 bool StorageS3::supportsSubsetOfColumns(const ContextPtr & context) const
 {
-    return FormatFactory::instance().checkIfFormatSupportsSubsetOfColumns(configuration.format, context, format_settings);
+    return FormatFactory::instance().checkIfFormatSupportsSubsetOfColumns(getConfiguration().format, context, format_settings);
 }
 
 bool StorageS3::prefersLargeBlocks() const
 {
+    std::lock_guard lock{configuration_update_mutex};
     return FormatFactory::instance().checkIfOutputFormatPrefersLargeBlocks(configuration.format);
 }
 
 bool StorageS3::parallelizeOutputAfterReading(ContextPtr context) const
 {
+    std::lock_guard lock{configuration_update_mutex};
     return FormatFactory::instance().checkParallelizeOutputAfterReading(configuration.format, context);
 }
 
@@ -1443,6 +1444,7 @@ void StorageS3::read(
     size_t max_block_size,
     size_t num_streams)
 {
+    updateConfiguration(local_context);
     auto read_from_format_info = prepareReadingFromFormat(column_names, storage_snapshot, supportsSubsetOfColumns(local_context));
 
     bool need_only_count = (query_info.optimize_trivial_count || read_from_format_info.requested_columns.empty())
@@ -1575,8 +1577,9 @@ SinkToStoragePtr StorageS3::write(
                 query_configuration.url.key);
 
         if (auto new_key = checkAndGetNewFileOnInsertIfNeeded(
-                local_context, configuration, query_configuration.keys.front(), query_configuration.keys.size()))
+                local_context, query_configuration, query_configuration.keys.front(), query_configuration.keys.size()))
         {
+            std::lock_guard lock{configuration_update_mutex};
             query_configuration.keys.push_back(*new_key);
             configuration.keys.push_back(*new_key);
             key = *new_key;
@@ -1658,7 +1661,7 @@ void StorageS3::useConfiguration(const StorageS3::Configuration & new_configurat
     configuration = new_configuration;
 }
 
-const StorageS3::Configuration & StorageS3::getConfiguration()
+StorageS3::Configuration StorageS3::getConfiguration() const
 {
     std::lock_guard lock(configuration_update_mutex);
     return configuration;

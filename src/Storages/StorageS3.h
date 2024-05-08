@@ -419,7 +419,7 @@ protected:
 
     void useConfiguration(const Configuration & new_configuration);
 
-    const Configuration & getConfiguration();
+    Configuration getConfiguration() const;
 
 private:
     friend class StorageS3Cluster;
@@ -428,7 +428,7 @@ private:
     friend class ReadFromStorageS3Step;
 
     Configuration configuration;
-    std::mutex configuration_update_mutex;
+    mutable std::mutex configuration_update_mutex;
 
     String name;
     const bool distributed_processing;
