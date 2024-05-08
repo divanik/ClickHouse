@@ -173,6 +173,7 @@ public:
         , max_block_size(max_block_size_)
         , num_streams(num_streams_)
     {
+        //storage_.updateConfigurationAndGetCopy(context);
         query_configuration.update(context);
         virtual_columns = storage.getVirtualsList();
     }
