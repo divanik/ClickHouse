@@ -78,7 +78,6 @@
 
 #include <boost/algorithm/string.hpp>
 
-
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant"
 #include <re2/re2.h>
@@ -169,7 +168,7 @@ public:
         , storage(storage_)
         , read_from_format_info(std::move(read_from_format_info_))
         , need_only_count(need_only_count_)
-        , query_configuration(storage.getConfiguration())
+        , query_configuration(storage.getConfigurationCopy())
         , max_block_size(max_block_size_)
         , num_streams(num_streams_)
     {
@@ -818,7 +817,6 @@ StorageS3Source::ReaderHolder StorageS3Source::createReader(size_t idx)
     QueryPipelineBuilder builder;
     std::shared_ptr<ISource> source;
     std::unique_ptr<ReadBuffer> read_buf;
-
     std::optional<size_t> num_rows_from_cache = need_only_count && getContext()->getSettingsRef().use_cache_for_count_from_files ? tryGetNumRowsFromCache(*key_with_info) : std::nullopt;
     if (num_rows_from_cache)
     {
@@ -944,10 +942,6 @@ std::unique_ptr<ReadBufferFromFileBase> createAsyncS3ReadBuffer(
     const String & version_id,
     const S3Settings::RequestSettings & request_settings)
 {
-    //     client = std::move(client_ptr),
-    // bucket_moved = std::move(bucket),
-    // version_id_moved = std::move(version_id),
-    // request_settings_moved = std::move(request_settings)
     auto read_buffer_creator = [=](bool restricted_seek, const StoredObject & object) -> std::unique_ptr<ReadBufferFromFileBase>
     {
         return std::make_unique<ReadBufferFromS3>(
@@ -1210,7 +1204,6 @@ std::optional<String> checkAndGetNewFileOnInsertIfNeeded(
         "want to create a new file on each insert, enable setting s3_create_new_file_on_insert",
         configuration.url.bucket, key);
 }
-
 }
 
 
@@ -1291,7 +1284,7 @@ private:
 
 
 StorageS3::StorageS3(
-    const StorageS3::Configuration & configuration_,
+    const Configuration & configuration_,
     const ContextPtr & context_,
     const StorageID & table_id_,
     const ColumnsDescription & columns_,
@@ -1315,7 +1308,6 @@ StorageS3::StorageS3(
     context_->getGlobalContext()->getHTTPHeaderFilter().checkHeaders(configuration.headers_from_ast);
 
     StorageInMemoryMetadata storage_metadata;
-
     if (columns_.empty())
     {
         ColumnsDescription columns;
@@ -1419,19 +1411,20 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
 
 bool StorageS3::supportsSubsetOfColumns(const ContextPtr & context) const
 {
-    return FormatFactory::instance().checkIfFormatSupportsSubsetOfColumns(getConfiguration().format, context, format_settings);
+    std::lock_guard lock{configuration_update_mutex};
+    return FormatFactory::instance().checkIfFormatSupportsSubsetOfColumns(getFormatCopy(), context, format_settings);
 }
 
 bool StorageS3::prefersLargeBlocks() const
 {
     std::lock_guard lock{configuration_update_mutex};
-    return FormatFactory::instance().checkIfOutputFormatPrefersLargeBlocks(configuration.format);
+    return FormatFactory::instance().checkIfOutputFormatPrefersLargeBlocks(getFormatCopy());
 }
 
 bool StorageS3::parallelizeOutputAfterReading(ContextPtr context) const
 {
     std::lock_guard lock{configuration_update_mutex};
-    return FormatFactory::instance().checkParallelizeOutputAfterReading(configuration.format, context);
+    return FormatFactory::instance().checkParallelizeOutputAfterReading(getFormatCopy(), context);
 }
 
 void StorageS3::read(
@@ -1480,7 +1473,7 @@ void ReadFromStorageS3Step::createIterator(const ActionsDAG::Node * predicate)
         return;
 
     iterator_wrapper = createFileIterator(
-        storage.getConfiguration(),
+        storage.getConfigurationCopy(),
         storage.distributed_processing,
         context,
         predicate,
@@ -1661,10 +1654,16 @@ void StorageS3::useConfiguration(const StorageS3::Configuration & new_configurat
     configuration = new_configuration;
 }
 
-StorageS3::Configuration StorageS3::getConfiguration() const
+StorageS3::Configuration StorageS3::getConfigurationCopy() const
 {
     std::lock_guard lock(configuration_update_mutex);
     return configuration;
+}
+
+String StorageS3::getFormatCopy() const
+{
+    std::lock_guard lock(configuration_update_mutex);
+    return configuration.format;
 }
 
 bool StorageS3::Configuration::update(const ContextPtr & context)

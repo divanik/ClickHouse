@@ -2,7 +2,6 @@
 
 #include <memory>
 #include <IO/ReadBufferFromS3.h>
-#include "Common/logger_useful.h"
 #include "IO/Archives/IArchiveReader.h"
 #include "IO/Archives/createArchiveReader.h"
 #include "IO/ReadBuffer.h"
@@ -325,7 +324,6 @@ private:
     std::optional<size_t> tryGetNumRowsFromCache(const KeyWithInfo & key_with_info);
 };
 
-
 /**
  * This class represents table engine for external S3 urls.
  * It sends HTTP GET to server when select is called and
@@ -419,7 +417,9 @@ protected:
 
     void useConfiguration(const Configuration & new_configuration);
 
-    Configuration getConfiguration() const;
+    Configuration getConfigurationCopy() const;
+
+    String getFormatCopy() const;
 
 private:
     friend class StorageS3Cluster;
