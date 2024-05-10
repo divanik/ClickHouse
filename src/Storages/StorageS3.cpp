@@ -1791,10 +1791,9 @@ StorageS3::Configuration StorageS3::getConfiguration(ASTs & engine_args, const C
         size_t count = StorageURL::evalArgsAndCollectHeaders(engine_args, configuration.headers_from_ast, local_context);
 
         if (count == 0 || count > 6)
-            throw Exception(
-                ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
-                "Storage S3 requires 1 to 5 arguments: "
-                "url, [NOSIGN | access_key_id, secret_access_key], name of used format and [compression_method]");
+            throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
+                            "Storage S3 requires 1 to 6 positional arguments: "
+                            "url, [NOSIGN | access_key_id, secret_access_key], [session_token], [name of used format], [compression_method], [headers], [extra_credentials]");
 
         std::unordered_map<std::string_view, size_t> engine_args_to_idx;
         bool no_sign_request = false;
