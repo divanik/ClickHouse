@@ -1411,19 +1411,16 @@ static std::shared_ptr<StorageS3Source::IIterator> createFileIterator(
 
 bool StorageS3::supportsSubsetOfColumns(const ContextPtr & context) const
 {
-    std::lock_guard lock{configuration_update_mutex};
     return FormatFactory::instance().checkIfFormatSupportsSubsetOfColumns(getFormatCopy(), context, format_settings);
 }
 
 bool StorageS3::prefersLargeBlocks() const
 {
-    std::lock_guard lock{configuration_update_mutex};
     return FormatFactory::instance().checkIfOutputFormatPrefersLargeBlocks(getFormatCopy());
 }
 
 bool StorageS3::parallelizeOutputAfterReading(ContextPtr context) const
 {
-    std::lock_guard lock{configuration_update_mutex};
     return FormatFactory::instance().checkParallelizeOutputAfterReading(getFormatCopy(), context);
 }
 
