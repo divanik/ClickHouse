@@ -147,7 +147,7 @@ DiskPtr DiskSelector::get(const String & name) const
 {
     auto disk = tryGet(name);
     if (!disk)
-        throw Exception(ErrorCodes::UNKNOWN_DISK, "Unknown disk {}", name);
+        throw Exception(ErrorCodes::UNKNOWN_DISK, "Unknown disk: {}", name);
     return disk;
 }
 

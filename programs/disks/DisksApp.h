@@ -35,9 +35,11 @@ protected:
         boost::program_options::positional_options_description & positional_options_description);
     void processOptions();
 
-    void printHelpMessage(ProgramOptionsDescription & command_option_description);
+    void printHelpMessage(const ProgramOptionsDescription & command_option_description);
 
-    size_t findCommandPos(std::vector<String> & common_arguments);
+    size_t findCommandPos(std::vector<String> & common_arguments, const ProgramOptionsDescription & options_description);
+
+    [[noreturn]] void stopWithUnknownCommandName(const ProgramOptionsDescription & command_option_description);
 
 private:
     void parseAndCheckOptions(
@@ -49,13 +51,33 @@ protected:
     ContextMutablePtr global_context;
     SharedContextHolder shared_context;
 
-    String command_name;
+    String command_name{};
     std::vector<String> command_arguments;
 
-    std::unordered_set<String> supported_commands;
+    const std::unordered_set<String> supported_commands = []()
+    {
+        std::unordered_set<String> supported_commands_local
+            = {"list-disks", "list", "move", "remove", "link", "copy", "write", "read", "mkdir"};
+#ifdef CLICKHOUSE_CLOUD
+        supported_commands_local.insert("packed-io");
+#endif
+        return supported_commands_local;
+    }();
+    const std::unordered_map<String, String> aliases
+        = {{"cp", "copy"},
+           {"mv", "move"},
+           {"ls", "list"},
+           {"list_disks", "list-disks"},
+           {"ln", "link"},
+           {"rm", "remove"},
+           {"r", "read"},
+           {"w", "write"},
+           {"delete", "remove"},
+           {"ls-disks", "list-disks"},
+           {"ls_disks", "list-disks"},
+           {"packed_io", "packed-io"}};
     std::unordered_map<String, CommandPtr> command_descriptions;
 
     po::variables_map options;
 };
-
 }

@@ -1,4 +1,6 @@
 #include "DiskFactory.h"
+#include <Poco/Logger.h>
+#include "Common/logger_useful.h"
 
 namespace DB
 {
@@ -30,6 +32,11 @@ DiskPtr DiskFactory::create(
     bool custom_disk) const
 {
     const auto disk_type = config.getString(config_prefix + ".type", "local");
+
+    std::cerr << "Config prefix: " << config_prefix << std::endl;
+    std::cerr << "Disk_type: " << disk_type << std::endl;
+    for (const auto & [key, value] : registry)
+        std::cerr << "Key in registry: " << key << std::endl;
 
     const auto found = registry.find(disk_type);
     if (found == registry.end())

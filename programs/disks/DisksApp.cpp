@@ -1,10 +1,15 @@
 #include "DisksApp.h"
+#include <exception>
+#include <stdexcept>
 #include "ICommand.h"
 
 #include <Disks/registerDisks.h>
 
 #include <Common/TerminalSize.h>
 #include <Formats/registerFormats.h>
+
+
+#include "Common/logger_useful.h"
 
 
 namespace DB
@@ -15,15 +20,7 @@ namespace ErrorCodes
     extern const int BAD_ARGUMENTS;
 }
 
-size_t DisksApp::findCommandPos(std::vector<String> & common_arguments)
-{
-    for (size_t i = 0; i < common_arguments.size(); i++)
-        if (supported_commands.contains(common_arguments[i]))
-            return i + 1;
-    return common_arguments.size();
-}
-
-void DisksApp::printHelpMessage(ProgramOptionsDescription & command_option_description)
+void DisksApp::printHelpMessage(const ProgramOptionsDescription & command_option_description)
 {
     std::optional<ProgramOptionsDescription> help_description =
         createOptionsDescription("Help Message for clickhouse-disks", getTerminalWidth());
@@ -35,12 +32,40 @@ void DisksApp::printHelpMessage(ProgramOptionsDescription & command_option_descr
     std::cout << "clickhouse-disks\n\n";
 
     for (const auto & current_command : supported_commands)
-        std::cout << command_descriptions[current_command]->command_name
-                  << "\t"
-                  << command_descriptions[current_command]->description
-                  << "\n\n";
+    {
+        std::cout << command_descriptions[current_command]->command_name;
+        bool was = false;
+        for (const auto & [alias_name, alias_command_name] : aliases)
+        {
+            if (alias_command_name == current_command)
+            {
+                if (was)
+                    std::cout << ",";
+                else
+                    std::cout << "(";
+                std::cout << alias_name;
+                was = true;
+            }
+        }
+        std::cout << (was ? ")" : "") << " \t" << command_descriptions[current_command]->description << "\n\n";
+    }
 
     std::cout << command_option_description << '\n';
+}
+
+[[noreturn]] void DisksApp::stopWithUnknownCommandName(const ProgramOptionsDescription & command_option_description)
+{
+    printHelpMessage(command_option_description);
+    std::cerr << "Command name couldn't be resolved" << std::endl;
+    exit(1);
+}
+
+size_t DisksApp::findCommandPos(std::vector<String> & common_arguments, const ProgramOptionsDescription & options_description)
+{
+    for (size_t i = 0; i < common_arguments.size(); i++)
+        if (supported_commands.contains(common_arguments[i]) || (aliases.contains(common_arguments[i])))
+            return i + 1;
+    stopWithUnknownCommandName(options_description);
 }
 
 String DisksApp::getDefaultConfigFileName()
@@ -53,21 +78,12 @@ void DisksApp::addOptions(
     boost::program_options::positional_options_description & positional_options_description
 )
 {
-    options_description_.add_options()
-        ("help,h", "Print common help message")
-        ("config-file,C", po::value<String>(), "Set config file")
-        ("disk", po::value<String>(), "Set disk name")
-        ("command_name", po::value<String>(), "Name for command to do")
-        ("save-logs", "Save logs to a file")
-        ("log-level", po::value<String>(), "Logging level")
-        ;
+    options_description_.add_options()("help,h", "Print common help message")("config-file,C", po::value<String>(), "Set config file")(
+        "disk", po::value<String>(), "Set disk name")("command_name", po::value<String>(), "Name for command to do")(
+        "save-logs", "Save logs to a file")("log-level", po::value<String>(), "Logging level")(
+        "subargs", po::value<std::vector<std::string>>(), "Arguments for command");
 
-    positional_options_description.add("command_name", 1);
-
-    supported_commands = {"list-disks", "list", "move", "remove", "link", "copy", "write", "read", "mkdir"};
-#ifdef CLICKHOUSE_CLOUD
-    supported_commands.insert("packed-io");
-#endif
+    positional_options_description.add("command_name", 1).add("subargs", -1);
 
     command_descriptions.emplace("list-disks", makeCommandListDisks());
     command_descriptions.emplace("list", makeCommandList());
@@ -102,6 +118,8 @@ DisksApp::~DisksApp()
 
 void DisksApp::init(std::vector<String> & common_arguments)
 {
+    for (auto & argument : common_arguments)
+        std::cerr << "Common arguments: " << argument << std::endl;
     stopOptionsProcessing();
 
     ProgramOptionsDescription options_description{createOptionsDescription("clickhouse-disks", getTerminalWidth())};
@@ -110,13 +128,16 @@ void DisksApp::init(std::vector<String> & common_arguments)
 
     addOptions(options_description, positional_options_description);
 
-    size_t command_pos = findCommandPos(common_arguments);
+    size_t command_pos = findCommandPos(common_arguments, options_description);
     std::vector<String> global_flags(command_pos);
     command_arguments.resize(common_arguments.size() - command_pos);
     copy(common_arguments.begin(), common_arguments.begin() + command_pos, global_flags.begin());
     copy(common_arguments.begin() + command_pos, common_arguments.end(), command_arguments.begin());
 
-    parseAndCheckOptions(options_description, positional_options_description, global_flags);
+    parseAndCheckOptions(options_description, positional_options_description, common_arguments);
+
+    for (const auto & description : options_description.options())
+        std::cerr << "Description: " << description->description() << std::endl;
 
     po::notify(options);
 
@@ -128,9 +149,7 @@ void DisksApp::init(std::vector<String> & common_arguments)
 
     if (!supported_commands.contains(command_name))
     {
-        std::cerr << "Unknown command name:  " << command_name << "\n";
-        printHelpMessage(options_description);
-        throw DB::Exception(DB::ErrorCodes::BAD_ARGUMENTS, "Bad Arguments");
+        stopWithUnknownCommandName(options_description);
     }
 
     processOptions();
@@ -141,20 +160,34 @@ void DisksApp::parseAndCheckOptions(
     boost::program_options::positional_options_description & positional_options_description,
     std::vector<String> & arguments)
 {
+    std::cout << "Before parsing" << std::endl;
     auto parser = po::command_line_parser(arguments)
         .options(options_description_)
         .positional(positional_options_description)
         .allow_unregistered();
-
+    std::cout << "After parsing" << std::endl;
     po::parsed_options parsed = parser.run();
+    std::cout << "After parsing 2" << std::endl;
+
+    for (size_t i = 0; i < parsed.options.size(); ++i)
+        std::cout << parsed.options[i].string_key << std::endl;
+    // throw std::runtime_error("What's the fuck");
     po::store(parsed, options);
+    // std::cout << "After parsing 3" << std::endl;
 
     auto positional_arguments = po::collect_unrecognized(parsed.options, po::collect_unrecognized_mode::include_positional);
     for (const auto & arg : positional_arguments)
     {
-        if (command_descriptions.contains(arg))
+        std::cout << "Pos arg " << arg << std::endl;
+        if (supported_commands.contains(arg))
         {
             command_name = arg;
+            break;
+        }
+        auto it = aliases.find(arg);
+        if (it != aliases.end())
+        {
+            command_name = it->second;
             break;
         }
     }
@@ -162,6 +195,11 @@ void DisksApp::parseAndCheckOptions(
 
 int DisksApp::main(const std::vector<String> & /*args*/)
 {
+    // LOG_DEBUG(&Poco::Logger::get("Shrek "), "Shrek");
+    std::vector<std::string> keys;
+    config().keys(keys);
+    for (auto & key : keys)
+        std::cerr << "Key: " << key << std::endl;
     if (config().has("config-file") || fs::exists(getDefaultConfigFileName()))
     {
         String config_path = config().getString("config-file", getDefaultConfigFileName());
@@ -174,6 +212,10 @@ int DisksApp::main(const std::vector<String> & /*args*/)
     {
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "No config-file specified");
     }
+
+    config().keys(keys);
+    for (auto & key : keys)
+        std::cerr << "Key2: " << key << std::endl;
 
     if (config().has("save-logs"))
     {
@@ -200,6 +242,8 @@ int DisksApp::main(const std::vector<String> & /*args*/)
 
     String path = config().getString("path", DBMS_DEFAULT_PATH);
     global_context->setPath(path);
+
+    std::cerr << "Command name: " << command_name << std::endl;
 
     auto & command = command_descriptions[command_name];
 
